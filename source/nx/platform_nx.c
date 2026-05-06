@@ -78,11 +78,21 @@ void nxmt_platform_print(const char *fmt, ...) {
     consoleUpdate(NULL);
 }
 
-bool nxmt_platform_should_quit(void) {
+NxmtInput nxmt_platform_read_input(void) {
     nxmt_platform_pad_init();
     padUpdate(&g_pad);
     uint64_t down = padGetButtonsDown(&g_pad);
-    return (down & HidNpadButton_Plus) != 0;
+
+    NxmtInput input;
+    input.a = (down & HidNpadButton_A) != 0;
+    input.x = (down & HidNpadButton_X) != 0;
+    input.y = (down & HidNpadButton_Y) != 0;
+    input.plus = (down & HidNpadButton_Plus) != 0;
+    return input;
+}
+
+bool nxmt_platform_should_quit(void) {
+    return nxmt_platform_read_input().plus;
 }
 
 bool nxmt_platform_write_report(const char *text) {
