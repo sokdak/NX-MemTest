@@ -5,7 +5,11 @@
 #include <switch.h>
 #include "nxmt/platform.h"
 
-static unsigned char g_internal_heap[4 * 1024 * 1024];
+/*
+ * Keep the runtime heap out of OverrideHeap, but do not make it large enough
+ * to inflate the NRO bss and trip launchers that map bss before entry.
+ */
+static unsigned char g_internal_heap[1 * 1024 * 1024] __attribute__((aligned(4096)));
 static PadState g_pad;
 static bool g_pad_initialized;
 
