@@ -8,6 +8,7 @@ TARGET := NX-MemTest
 BUILD := build
 SOURCES := source/core source/nx
 INCLUDES := include
+LIBDIRS := $(PORTLIBS) $(LIBNX)
 APP_TITLE := NX-MemTest
 APP_AUTHOR := Codex
 APP_VERSION := 0.1.0
@@ -16,7 +17,7 @@ CFLAGS := -g -Wall -Wextra -O2 -ffunction-sections -fdata-sections
 CFLAGS += $(ARCH) $(DEFINES) $(INCLUDE)
 CXXFLAGS := $(CFLAGS) -fno-rtti -fno-exceptions
 ASFLAGS := -g $(ARCH)
-LDFLAGS = -specs=$(DEVKITPRO)/libnx/switch.specs -g $(ARCH) -Wl,-Map,$(notdir $*.map)
+LDFLAGS = -specs=$(DEVKITPRO)/libnx/switch.specs -g $(ARCH) $(LIBPATHS) -Wl,-Map,$(notdir $*.map)
 LIBS := -lnx
 
 ifneq ($(BUILD),$(notdir $(CURDIR)))
@@ -27,8 +28,8 @@ export DEPSDIR := $(CURDIR)/$(BUILD)
 
 CFILES := $(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.c)))
 export OFILES := $(CFILES:.c=.o)
-export INCLUDE := $(foreach dir,$(INCLUDES),-I$(CURDIR)/$(dir))
-export LIBPATHS :=
+export INCLUDE := $(foreach dir,$(INCLUDES),-I$(CURDIR)/$(dir)) $(foreach dir,$(LIBDIRS),-I$(dir)/include)
+export LIBPATHS := $(foreach dir,$(LIBDIRS),-L$(dir)/lib)
 
 .PHONY: all clean $(BUILD)
 
