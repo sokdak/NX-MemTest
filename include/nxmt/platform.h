@@ -31,6 +31,7 @@ uint64_t nxmt_platform_ticks_ms(void);
 void nxmt_platform_console_init(void);
 void nxmt_platform_console_exit(void);
 void nxmt_platform_print(const char *fmt, ...);
+void nxmt_platform_debug_stage(const char *stage);
 NxmtInput nxmt_platform_read_input(void);
 bool nxmt_platform_should_quit(void);
 bool nxmt_platform_write_report(const char *text);

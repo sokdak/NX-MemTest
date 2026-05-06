@@ -102,6 +102,28 @@ void nxmt_platform_print(const char *fmt, ...) {
     consoleUpdate(NULL);
 }
 
+void nxmt_platform_debug_stage(const char *stage) {
+    FsFileSystem fs;
+    if (R_FAILED(fsOpenSdCardFileSystem(&fs))) {
+        return;
+    }
+
+    fsFsCreateDirectory(&fs, "/switch/NX-MemTest");
+    fsFsCreateDirectory(&fs, "/switch/NX-MemTest/logs");
+    fsFsCreateFile(&fs, "/switch/NX-MemTest/logs/boot_stage.txt", 512, 0);
+
+    FsFile f;
+    if (R_SUCCEEDED(fsFsOpenFile(&fs, "/switch/NX-MemTest/logs/boot_stage.txt", FsOpenMode_Write, &f))) {
+        char text[512];
+        memset(text, 0, sizeof(text));
+        snprintf(text, sizeof(text) - 1, "stage=%s\n", stage);
+        fsFileWrite(&f, 0, text, sizeof(text), FsWriteOption_Flush);
+        fsFileClose(&f);
+    }
+
+    fsFsClose(&fs);
+}
+
 NxmtInput nxmt_platform_read_input(void) {
     nxmt_platform_pad_init();
     padUpdate(&g_pad);

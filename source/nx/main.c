@@ -229,13 +229,18 @@ int main(int argc, char **argv) {
     (void)argc;
     (void)argv;
 
+    nxmt_platform_debug_stage("main-entry");
     nxmt_platform_console_init();
+    nxmt_platform_debug_stage("console-init");
 
     NxmtPlatformMemory memory;
+    nxmt_platform_debug_stage("memory-query-start");
     nxmt_platform_get_memory(&memory);
+    nxmt_platform_debug_stage("memory-query-done");
 
     nxmt_platform_print("NX-MemTest\n");
     nxmt_platform_print("NRO full-memory stress test\n\n");
+    nxmt_platform_debug_stage("banner-printed");
 
     if (!memory.has_heap_override) {
         nxmt_platform_print("No OverrideHeap detected.\n");
@@ -248,6 +253,7 @@ int main(int argc, char **argv) {
     }
 
     NxmtArena arena = nxmt_arena_from_range(memory.override_heap_addr, memory.override_heap_size);
+    nxmt_platform_debug_stage("arena-ready");
     print_size_line("Test Arena", arena.size);
     if (memory.has_effective_total) {
         print_size_line("Effective Total", memory.effective_total_memory);
@@ -262,10 +268,12 @@ int main(int argc, char **argv) {
     }
 
     NxmtMode mode = NXMT_MODE_QUICK;
+    nxmt_platform_debug_stage("mode-select-start");
     if (!choose_mode(arena.size, &mode)) {
         nxmt_platform_console_exit();
         return 0;
     }
+    nxmt_platform_debug_stage("mode-selected");
 
     uint64_t seed = nxmt_platform_seed64();
     uint32_t workers = worker_count_for_mode(mode);
@@ -280,6 +288,7 @@ int main(int argc, char **argv) {
     memset(&total_stats, 0, sizeof(total_stats));
 
     nxmt_platform_print("\nRunning %s...\n", mode_name(mode));
+    nxmt_platform_debug_stage("run-start");
     uint64_t started = nxmt_platform_ticks_ms();
     NxmtStatus status = NXMT_STATUS_PASS;
     bool thread_fallback = false;
