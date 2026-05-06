@@ -56,7 +56,15 @@ static uint64_t nxmt_load_word(const uint8_t *base, uint64_t word_index) {
     return value;
 }
 
-static void nxmt_write_phase(
+static bool nxmt_runner_stop_requested(const NxmtRunConfig *config) {
+    return config->stop_requested != 0 && atomic_load_explicit(config->stop_requested, memory_order_relaxed);
+}
+
+static NxmtStatus nxmt_runner_abort_status(const NxmtReport *report, uint64_t initial_errors) {
+    return report->error_count != initial_errors ? NXMT_STATUS_FAIL : NXMT_STATUS_ABORTED;
+}
+
+static bool nxmt_write_phase(
     uint8_t *base,
     uint64_t start,
     uint64_t count,
@@ -64,6 +72,9 @@ static void nxmt_write_phase(
     const NxmtRunConfig *config,
     uint64_t *pressure_state) {
     for (uint64_t i = 0; i < count; ++i) {
+        if (nxmt_runner_stop_requested(config)) {
+            return false;
+        }
         uint64_t word_index = start + i;
         uint64_t offset = word_index * NXMT_WORD_BYTES;
         uint64_t value = nxmt_expected_value(config->seed, phase, config->pass, offset);
@@ -77,9 +88,10 @@ static void nxmt_write_phase(
         uint64_t value = nxmt_load_word(base, start);
         nxmt_store_word(base, start, value ^ 0x100u);
     }
+    return true;
 }
 
-static void nxmt_verify_phase(
+static bool nxmt_verify_phase(
     const uint8_t *base,
     uint64_t start,
     uint64_t count,
@@ -88,6 +100,9 @@ static void nxmt_verify_phase(
     NxmtReport *report,
     uint64_t *pressure_state) {
     for (uint64_t i = 0; i < count; ++i) {
+        if (nxmt_runner_stop_requested(config)) {
+            return false;
+        }
         uint64_t word_index = start + i;
         uint64_t offset = word_index * NXMT_WORD_BYTES;
         uint64_t expected = nxmt_expected_value(config->seed, phase, config->pass, offset);
@@ -99,6 +114,7 @@ static void nxmt_verify_phase(
             nxmt_report_record_error(report, config->mode, phase, config->seed, config->pass, config->worker_id, offset, expected, actual);
         }
     }
+    return true;
 }
 
 NxmtStatus nxmt_runner_run_pass(
@@ -106,7 +122,7 @@ NxmtStatus nxmt_runner_run_pass(
     const NxmtRunConfig *config,
     NxmtReport *report,
     NxmtRunStats *stats) {
-    if (arena == 0 || config == 0 || report == 0 || stats == 0) {
+    if (stats == 0) {
         return NXMT_STATUS_UNSUPPORTED;
     }
 
@@ -115,6 +131,9 @@ NxmtStatus nxmt_runner_run_pass(
     stats->pressure_checksum = 0;
     stats->current_phase = NXMT_PHASE_FIXED_A;
 
+    if (arena == 0 || config == 0 || report == 0) {
+        return NXMT_STATUS_UNSUPPORTED;
+    }
     if (arena->base == 0 || arena->words == 0 || config->worker_count == 0 || config->worker_id >= config->worker_count) {
         return NXMT_STATUS_UNSUPPORTED;
     }
@@ -130,11 +149,21 @@ NxmtStatus nxmt_runner_run_pass(
     uint32_t phase_count = nxmt_phase_count_for_mode(config->mode);
 
     for (uint32_t p = 0; p < phase_count; ++p) {
+        if (nxmt_runner_stop_requested(config)) {
+            stats->pressure_checksum = pressure_state;
+            return nxmt_runner_abort_status(report, initial_errors);
+        }
         NxmtPhase phase = nxmt_phase_for_mode(config->mode, p);
         stats->current_phase = phase;
-        nxmt_write_phase(base, start, count, phase, config, &pressure_state);
+        if (!nxmt_write_phase(base, start, count, phase, config, &pressure_state)) {
+            stats->pressure_checksum = pressure_state;
+            return nxmt_runner_abort_status(report, initial_errors);
+        }
         stats->bytes_written += count * NXMT_WORD_BYTES;
-        nxmt_verify_phase(base, start, count, phase, config, report, &pressure_state);
+        if (!nxmt_verify_phase(base, start, count, phase, config, report, &pressure_state)) {
+            stats->pressure_checksum = pressure_state;
+            return nxmt_runner_abort_status(report, initial_errors);
+        }
         stats->bytes_verified += count * NXMT_WORD_BYTES;
     }
 

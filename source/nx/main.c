@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <stdatomic.h>
 #include <string.h>
 #include <switch.h>
 #include "nxmt/arena.h"
@@ -90,11 +91,14 @@ typedef struct NxmtWorkerContext {
 static Thread g_worker_threads[3];
 static unsigned char g_worker_stacks[3][64 * 1024] __attribute__((aligned(4096)));
 static NxmtWorkerContext g_worker_contexts[3];
+static atomic_bool g_stop_requested;
+static atomic_uint g_finished_workers;
 
 static void nxmt_worker_entry(void *arg) {
     NxmtWorkerContext *ctx = (NxmtWorkerContext*)arg;
     nxmt_report_init(&ctx->report);
     ctx->status = nxmt_runner_run_pass(ctx->arena, &ctx->config, &ctx->report, &ctx->stats);
+    atomic_fetch_add_explicit(&g_finished_workers, 1u, memory_order_release);
 }
 
 static NxmtStatus combine_worker_status(NxmtStatus current, NxmtStatus worker_status) {
@@ -116,7 +120,8 @@ static void init_worker_context(
     NxmtMode mode,
     uint64_t seed,
     uint32_t worker,
-    uint32_t workers) {
+    uint32_t workers,
+    atomic_bool *stop_requested) {
     memset(ctx, 0, sizeof(*ctx));
     ctx->arena = arena;
     ctx->config.mode = mode;
@@ -125,6 +130,7 @@ static void init_worker_context(
     ctx->config.worker_id = worker;
     ctx->config.worker_count = workers;
     ctx->config.inject_mismatch = false;
+    ctx->config.stop_requested = stop_requested;
     ctx->status = NXMT_STATUS_UNSUPPORTED;
 }
 
@@ -156,6 +162,8 @@ static void format_report(
     const NxmtReport *report,
     const NxmtRunStats *stats,
     NxmtStatus status,
+    bool thread_fallback,
+    bool stop_requested,
     uint64_t elapsed_ms) {
     uint64_t coverage = memory->has_switch_total ? nxmt_percent_milli(arena->size, memory->switch_total_memory) : 0;
 
@@ -166,6 +174,8 @@ static void format_report(
         "Workers Completed: %u\n"
         "Seed: 0x%016llx\n"
         "Status: %s\n"
+        "Thread Fallback: %s\n"
+        "Stop Requested: %s\n"
         "Test Arena MiB: %llu\n"
         "Switch Total MiB: %llu\n"
         "Physical Coverage MilliPercent: %llu\n"
@@ -182,6 +192,8 @@ static void format_report(
         completed_workers,
         (unsigned long long)seed,
         status_name(status),
+        thread_fallback ? "yes" : "no",
+        stop_requested ? "yes" : "no",
         (unsigned long long)(arena->size / NXMT_MIB_BYTES),
         (unsigned long long)(memory->has_switch_total ? memory->switch_total_memory / NXMT_MIB_BYTES : 0),
         (unsigned long long)coverage,
@@ -248,45 +260,72 @@ int main(int argc, char **argv) {
     nxmt_platform_print("\nRunning %s...\n", mode_name(mode));
     uint64_t started = nxmt_platform_ticks_ms();
     NxmtStatus status = NXMT_STATUS_PASS;
+    bool thread_fallback = false;
+    bool use_threaded_workers = true;
+    uint32_t created_threads = 0;
+    uint32_t started_threads = 0;
+    atomic_init(&g_stop_requested, false);
+    atomic_init(&g_finished_workers, 0u);
 
-    if (workers > 1u) {
-        bool use_threaded_workers = true;
-        uint32_t created_threads = 0;
+    for (uint32_t worker = 0; worker < workers; ++worker) {
+        init_worker_context(&g_worker_contexts[worker], &arena, mode, seed, worker, workers, &g_stop_requested);
+        Result rc = threadCreate(
+            &g_worker_threads[worker],
+            nxmt_worker_entry,
+            &g_worker_contexts[worker],
+            g_worker_stacks[worker],
+            sizeof(g_worker_stacks[worker]),
+            0x2c,
+            -2);
+        if (rc != 0) {
+            use_threaded_workers = false;
+            break;
+        }
+        created_threads += 1u;
+    }
 
+    if (!use_threaded_workers) {
+        for (uint32_t worker = 0; worker < created_threads; ++worker) {
+            threadClose(&g_worker_threads[worker]);
+        }
+        thread_fallback = true;
+        workers = 1u;
+    } else {
         for (uint32_t worker = 0; worker < workers; ++worker) {
-            init_worker_context(&g_worker_contexts[worker], &arena, mode, seed, worker, workers);
-            Result rc = threadCreate(
-                &g_worker_threads[worker],
-                nxmt_worker_entry,
-                &g_worker_contexts[worker],
-                g_worker_stacks[worker],
-                sizeof(g_worker_stacks[worker]),
-                0x2c,
-                -2);
+            nxmt_platform_print("Worker %u/%u...\n", worker + 1u, workers);
+            Result rc = threadStart(&g_worker_threads[worker]);
             if (rc != 0) {
                 use_threaded_workers = false;
                 break;
             }
-            created_threads += 1u;
+            started_threads += 1u;
         }
 
-        if (!use_threaded_workers) {
+        if (!use_threaded_workers && started_threads == 0) {
             for (uint32_t worker = 0; worker < created_threads; ++worker) {
                 threadClose(&g_worker_threads[worker]);
             }
+            thread_fallback = true;
             workers = 1u;
         } else {
-            uint32_t started_threads = 0;
-            for (uint32_t worker = 0; worker < workers; ++worker) {
-                nxmt_platform_print("Worker %u/%u...\n", worker + 1u, workers);
-                Result rc = threadStart(&g_worker_threads[worker]);
-                if (rc != 0) {
-                    use_threaded_workers = false;
+            while (atomic_load_explicit(&g_finished_workers, memory_order_acquire) < started_threads) {
+                if (!appletMainLoop()) {
+                    atomic_store_explicit(&g_stop_requested, true, memory_order_relaxed);
                     break;
                 }
-                started_threads += 1u;
+                if (nxmt_platform_read_input().plus) {
+                    atomic_store_explicit(&g_stop_requested, true, memory_order_relaxed);
+                    break;
+                }
+                svcSleepThread(10000000ll);
             }
 
+            for (uint32_t worker = 0; worker < started_threads; ++worker) {
+                threadWaitForExit(&g_worker_threads[worker]);
+            }
+            for (uint32_t worker = 0; worker < created_threads; ++worker) {
+                threadClose(&g_worker_threads[worker]);
+            }
             if (!use_threaded_workers) {
                 NxmtReport partial_report;
                 NxmtRunStats partial_stats;
@@ -294,13 +333,6 @@ int main(int argc, char **argv) {
                 uint32_t partial_completed_workers = 0;
                 nxmt_report_init(&partial_report);
                 memset(&partial_stats, 0, sizeof(partial_stats));
-
-                for (uint32_t worker = 0; worker < started_threads; ++worker) {
-                    threadWaitForExit(&g_worker_threads[worker]);
-                }
-                for (uint32_t worker = 0; worker < created_threads; ++worker) {
-                    threadClose(&g_worker_threads[worker]);
-                }
 
                 for (uint32_t worker = 0; worker < started_threads; ++worker) {
                     merge_worker_context(
@@ -311,43 +343,36 @@ int main(int argc, char **argv) {
                         &partial_completed_workers);
                 }
 
-                if (partial_status != NXMT_STATUS_PASS || partial_report.error_count > 0) {
+                if (partial_status == NXMT_STATUS_PASS &&
+                        partial_report.error_count == 0 &&
+                        !atomic_load_explicit(&g_stop_requested, memory_order_relaxed)) {
+                    thread_fallback = true;
+                    workers = 1u;
+                } else {
                     total_stats = partial_stats;
                     nxmt_report_merge(&report, &partial_report);
                     status = combine_worker_status(status, partial_status);
                     completed_workers = partial_completed_workers;
-                } else {
-                    nxmt_platform_print("Thread start failed; retrying single-worker fallback.\n");
-                    workers = 1u;
                 }
             } else {
-                for (uint32_t worker = 0; worker < workers; ++worker) {
-                    threadWaitForExit(&g_worker_threads[worker]);
-                    threadClose(&g_worker_threads[worker]);
-                }
-
-                for (uint32_t worker = 0; worker < workers; ++worker) {
+                for (uint32_t worker = 0; worker < started_threads; ++worker) {
                     merge_worker_context(&g_worker_contexts[worker], &report, &total_stats, &status, &completed_workers);
                 }
             }
         }
     }
 
-    if (workers == 1u && completed_workers == 0) {
+    if (thread_fallback) {
         NxmtWorkerContext context;
-        init_worker_context(&context, &arena, mode, seed, 0, 1u);
+        atomic_store_explicit(&g_stop_requested, false, memory_order_relaxed);
+        init_worker_context(&context, &arena, mode, seed, 0, 1u, &g_stop_requested);
         nxmt_report_init(&context.report);
         memset(&context.stats, 0, sizeof(context.stats));
 
+        nxmt_platform_print("Thread setup failed; retrying single-worker fallback.\n");
         nxmt_platform_print("Worker 1/1...\n");
         context.status = nxmt_runner_run_pass(&arena, &context.config, &context.report, &context.stats);
-        total_stats.bytes_written += context.stats.bytes_written;
-        total_stats.bytes_verified += context.stats.bytes_verified;
-        nxmt_report_merge(&report, &context.report);
-        status = combine_worker_status(status, context.status);
-        if (context.status != NXMT_STATUS_UNSUPPORTED && context.status != NXMT_STATUS_ABORTED) {
-            completed_workers += 1u;
-        }
+        merge_worker_context(&context, &report, &total_stats, &status, &completed_workers);
     }
 
     uint64_t elapsed = nxmt_platform_ticks_ms() - started;
@@ -373,9 +398,26 @@ int main(int argc, char **argv) {
     nxmt_platform_print("Elapsed: %llu ms\n", (unsigned long long)elapsed);
     nxmt_platform_print("Errors: %llu\n", (unsigned long long)report.error_count);
     nxmt_platform_print("Status: %s\n", status_name(status));
+    if (thread_fallback) {
+        nxmt_platform_print("Thread Fallback: yes\n");
+    }
 
     char report_text[2048];
-    format_report(report_text, sizeof(report_text), mode, workers, completed_workers, seed, &arena, &memory, &report, &total_stats, status, elapsed);
+    format_report(
+        report_text,
+        sizeof(report_text),
+        mode,
+        workers,
+        completed_workers,
+        seed,
+        &arena,
+        &memory,
+        &report,
+        &total_stats,
+        status,
+        thread_fallback,
+        atomic_load_explicit(&g_stop_requested, memory_order_relaxed),
+        elapsed);
     bool log_ok = nxmt_platform_write_report(report_text);
     nxmt_platform_print("Log: %s\n", log_ok ? NXMT_LOG_PATH : "unavailable");
 

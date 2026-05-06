@@ -33,16 +33,16 @@ void nxmt_platform_get_memory(NxmtPlatformMemory *out) {
     }
 
     uint64_t total = 0;
-    uint64_t pool = 0;
-    Result rc0 = svcGetSystemInfo(&pool, SystemInfoType_TotalPhysicalMemorySize, INVALID_HANDLE, PhysicalMemorySystemInfo_Application);
-    if (R_SUCCEEDED(rc0)) {
-        total += pool;
-        svcGetSystemInfo(&pool, SystemInfoType_TotalPhysicalMemorySize, INVALID_HANDLE, PhysicalMemorySystemInfo_Applet);
-        total += pool;
-        svcGetSystemInfo(&pool, SystemInfoType_TotalPhysicalMemorySize, INVALID_HANDLE, PhysicalMemorySystemInfo_System);
-        total += pool;
-        svcGetSystemInfo(&pool, SystemInfoType_TotalPhysicalMemorySize, INVALID_HANDLE, PhysicalMemorySystemInfo_SystemUnsafe);
-        total += pool;
+    uint64_t application_pool = 0;
+    uint64_t applet_pool = 0;
+    uint64_t system_pool = 0;
+    uint64_t unsafe_pool = 0;
+    Result rc_application = svcGetSystemInfo(&application_pool, SystemInfoType_TotalPhysicalMemorySize, INVALID_HANDLE, PhysicalMemorySystemInfo_Application);
+    Result rc_applet = svcGetSystemInfo(&applet_pool, SystemInfoType_TotalPhysicalMemorySize, INVALID_HANDLE, PhysicalMemorySystemInfo_Applet);
+    Result rc_system = svcGetSystemInfo(&system_pool, SystemInfoType_TotalPhysicalMemorySize, INVALID_HANDLE, PhysicalMemorySystemInfo_System);
+    Result rc_unsafe = svcGetSystemInfo(&unsafe_pool, SystemInfoType_TotalPhysicalMemorySize, INVALID_HANDLE, PhysicalMemorySystemInfo_SystemUnsafe);
+    if (R_SUCCEEDED(rc_application) && R_SUCCEEDED(rc_applet) && R_SUCCEEDED(rc_system) && R_SUCCEEDED(rc_unsafe)) {
+        total = application_pool + applet_pool + system_pool + unsafe_pool;
         out->switch_total_memory = total;
         out->has_switch_total = total != 0;
     }

@@ -1,3 +1,4 @@
+#include <stdatomic.h>
 #include <stdint.h>
 #include <string.h>
 #include "nxmt/arena.h"
@@ -18,6 +19,7 @@ int main(void) {
     config.worker_id = 0;
     config.worker_count = 1;
     config.inject_mismatch = false;
+    config.stop_requested = NULL;
 
     nxmt_report_init(&report);
     NxmtStatus status = nxmt_runner_run_pass(&arena, &config, &report, &stats);
@@ -86,6 +88,15 @@ int main(void) {
     status = nxmt_runner_run_pass(&arena, &config, &report, &stats);
     failed |= status == NXMT_STATUS_FAIL ? 0 : 1;
     failed |= report.error_count >= 1 ? 0 : 1;
+
+    atomic_bool stop_requested;
+    atomic_init(&stop_requested, true);
+    config.inject_mismatch = false;
+    config.stop_requested = &stop_requested;
+    nxmt_report_init(&report);
+    status = nxmt_runner_run_pass(&arena, &config, &report, &stats);
+    failed |= status == NXMT_STATUS_ABORTED ? 0 : 1;
+    failed |= report.error_count == 0 ? 0 : 1;
 
     return failed;
 }

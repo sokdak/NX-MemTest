@@ -3,6 +3,7 @@ $(error "Please set DEVKITPRO in your environment. export DEVKITPRO=<path to dev
 endif
 
 include $(DEVKITPRO)/libnx/switch_rules
+export LD := $(CC)
 
 TARGET := NX-MemTest
 BUILD := build
