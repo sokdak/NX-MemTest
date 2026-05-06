@@ -34,3 +34,4 @@ void nxmt_report_record_error(
     uint64_t offset,
     uint64_t expected,
     uint64_t actual);
+void nxmt_report_merge(NxmtReport *dst, const NxmtReport *src);

@@ -20,5 +20,14 @@ int main(void) {
     failed |= report.min_error_offset == 0x80 ? 0 : 1;
     failed |= report.max_error_offset == 0x100 ? 0 : 1;
 
+    NxmtReport other;
+    nxmt_report_init(&other);
+    nxmt_report_record_error(&other, NXMT_MODE_EXTREME, NXMT_PHASE_WALKING, 9, 5, 2, 0x40, 0xf0f0, 0xffff);
+    nxmt_report_merge(&report, &other);
+    failed |= report.error_count == 3 ? 0 : 1;
+    failed |= report.first.mode == NXMT_MODE_MEMORY_LOAD ? 0 : 1;
+    failed |= report.min_error_offset == 0x40 ? 0 : 1;
+    failed |= report.max_error_offset == 0x100 ? 0 : 1;
+
     return failed;
 }

@@ -18,6 +18,18 @@ static const NxmtPhase memory_load_phases[] = {
     NXMT_PHASE_WALKING
 };
 
+static volatile uint64_t g_extreme_sink;
+
+static void nxmt_extreme_cpu_pressure(uint64_t value) {
+    for (uint32_t i = 0; i < 64u; ++i) {
+        value = nxmt_mix64(value + i);
+        value ^= value << 13;
+        value ^= value >> 7;
+        value ^= value << 17;
+    }
+    g_extreme_sink ^= value;
+}
+
 static uint32_t nxmt_phase_count_for_mode(NxmtMode mode) {
     if (mode == NXMT_MODE_QUICK) {
         return (uint32_t)(sizeof(quick_phases) / sizeof(quick_phases[0]));
@@ -50,7 +62,11 @@ static void nxmt_write_phase(uint8_t *base, uint64_t start, uint64_t count, Nxmt
     for (uint64_t i = 0; i < count; ++i) {
         uint64_t word_index = start + i;
         uint64_t offset = word_index * NXMT_WORD_BYTES;
-        nxmt_store_word(base, word_index, nxmt_expected_value(config->seed, phase, config->pass, offset));
+        uint64_t value = nxmt_expected_value(config->seed, phase, config->pass, offset);
+        nxmt_store_word(base, word_index, value);
+        if (config->mode == NXMT_MODE_EXTREME) {
+            nxmt_extreme_cpu_pressure(value);
+        }
     }
 
     if (config->inject_mismatch && count > 0) {
@@ -71,6 +87,9 @@ static void nxmt_verify_phase(
         uint64_t offset = word_index * NXMT_WORD_BYTES;
         uint64_t expected = nxmt_expected_value(config->seed, phase, config->pass, offset);
         uint64_t actual = nxmt_load_word(base, word_index);
+        if (config->mode == NXMT_MODE_EXTREME) {
+            nxmt_extreme_cpu_pressure(actual);
+        }
         if (actual != expected) {
             nxmt_report_record_error(report, config->mode, phase, config->seed, config->pass, config->worker_id, offset, expected, actual);
         }

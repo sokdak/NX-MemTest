@@ -79,6 +79,55 @@ static uint32_t worker_count_for_mode(NxmtMode mode) {
     return mode == NXMT_MODE_EXTREME ? 3u : 1u;
 }
 
+typedef struct NxmtWorkerContext {
+    const NxmtArena *arena;
+    NxmtRunConfig config;
+    NxmtReport report;
+    NxmtRunStats stats;
+    NxmtStatus status;
+} NxmtWorkerContext;
+
+static Thread g_worker_threads[3];
+static unsigned char g_worker_stacks[3][64 * 1024] __attribute__((aligned(16)));
+static NxmtWorkerContext g_worker_contexts[3];
+
+static void nxmt_worker_entry(void *arg) {
+    NxmtWorkerContext *ctx = (NxmtWorkerContext*)arg;
+    nxmt_report_init(&ctx->report);
+    ctx->status = nxmt_runner_run_pass(ctx->arena, &ctx->config, &ctx->report, &ctx->stats);
+}
+
+static NxmtStatus combine_worker_status(NxmtStatus current, NxmtStatus worker_status) {
+    if (current == NXMT_STATUS_FAIL || worker_status == NXMT_STATUS_FAIL) {
+        return NXMT_STATUS_FAIL;
+    }
+    if (current == NXMT_STATUS_ABORTED || worker_status == NXMT_STATUS_ABORTED) {
+        return NXMT_STATUS_ABORTED;
+    }
+    if (current == NXMT_STATUS_UNSUPPORTED || worker_status == NXMT_STATUS_UNSUPPORTED) {
+        return NXMT_STATUS_UNSUPPORTED;
+    }
+    return NXMT_STATUS_PASS;
+}
+
+static void init_worker_context(
+    NxmtWorkerContext *ctx,
+    const NxmtArena *arena,
+    NxmtMode mode,
+    uint64_t seed,
+    uint32_t worker,
+    uint32_t workers) {
+    memset(ctx, 0, sizeof(*ctx));
+    ctx->arena = arena;
+    ctx->config.mode = mode;
+    ctx->config.seed = seed;
+    ctx->config.pass = 0;
+    ctx->config.worker_id = worker;
+    ctx->config.worker_count = workers;
+    ctx->config.inject_mismatch = false;
+    ctx->status = NXMT_STATUS_UNSUPPORTED;
+}
+
 static void format_report(
     char *out,
     size_t out_size,
@@ -170,8 +219,10 @@ int main(int argc, char **argv) {
 
     uint64_t seed = nxmt_platform_seed64();
     uint32_t workers = worker_count_for_mode(mode);
+    if (workers > 3u) {
+        workers = 3u;
+    }
     uint32_t completed_workers = 0;
-    bool saw_failure = false;
 
     NxmtReport report;
     NxmtRunStats total_stats;
@@ -182,36 +233,87 @@ int main(int argc, char **argv) {
     uint64_t started = nxmt_platform_ticks_ms();
     NxmtStatus status = NXMT_STATUS_PASS;
 
-    for (uint32_t worker = 0; worker < workers; ++worker) {
-        NxmtRunConfig config;
-        NxmtRunStats stats;
-        memset(&stats, 0, sizeof(stats));
+    if (workers > 1u) {
+        bool use_threaded_workers = true;
+        uint32_t created_threads = 0;
 
-        config.mode = mode;
-        config.seed = seed;
-        config.pass = 0;
-        config.worker_id = worker;
-        config.worker_count = workers;
-        config.inject_mismatch = false;
-
-        nxmt_platform_print("Worker %u/%u...\n", worker + 1u, workers);
-        NxmtStatus worker_status = nxmt_runner_run_pass(&arena, &config, &report, &stats);
-        total_stats.bytes_written += stats.bytes_written;
-        total_stats.bytes_verified += stats.bytes_verified;
-
-        if (worker_status == NXMT_STATUS_UNSUPPORTED || worker_status == NXMT_STATUS_ABORTED) {
-            status = worker_status;
-            break;
+        for (uint32_t worker = 0; worker < workers; ++worker) {
+            init_worker_context(&g_worker_contexts[worker], &arena, mode, seed, worker, workers);
+            Result rc = threadCreate(
+                &g_worker_threads[worker],
+                nxmt_worker_entry,
+                &g_worker_contexts[worker],
+                g_worker_stacks[worker],
+                sizeof(g_worker_stacks[worker]),
+                0x2c,
+                -2);
+            if (rc != 0) {
+                use_threaded_workers = false;
+                break;
+            }
+            created_threads += 1u;
         }
 
-        completed_workers += 1u;
-        if (worker_status == NXMT_STATUS_FAIL) {
-            saw_failure = true;
+        if (!use_threaded_workers) {
+            for (uint32_t worker = 0; worker < created_threads; ++worker) {
+                threadClose(&g_worker_threads[worker]);
+            }
+            workers = 1u;
+        } else {
+            uint32_t started_threads = 0;
+            for (uint32_t worker = 0; worker < workers; ++worker) {
+                nxmt_platform_print("Worker %u/%u...\n", worker + 1u, workers);
+                Result rc = threadStart(&g_worker_threads[worker]);
+                if (rc != 0) {
+                    use_threaded_workers = false;
+                    break;
+                }
+                started_threads += 1u;
+            }
+
+            if (!use_threaded_workers) {
+                for (uint32_t worker = 0; worker < started_threads; ++worker) {
+                    threadWaitForExit(&g_worker_threads[worker]);
+                }
+                for (uint32_t worker = 0; worker < created_threads; ++worker) {
+                    threadClose(&g_worker_threads[worker]);
+                }
+                workers = 1u;
+            } else {
+                for (uint32_t worker = 0; worker < workers; ++worker) {
+                    threadWaitForExit(&g_worker_threads[worker]);
+                    threadClose(&g_worker_threads[worker]);
+                }
+
+                for (uint32_t worker = 0; worker < workers; ++worker) {
+                    NxmtWorkerContext *ctx = &g_worker_contexts[worker];
+                    total_stats.bytes_written += ctx->stats.bytes_written;
+                    total_stats.bytes_verified += ctx->stats.bytes_verified;
+                    nxmt_report_merge(&report, &ctx->report);
+                    status = combine_worker_status(status, ctx->status);
+                    if (ctx->status != NXMT_STATUS_UNSUPPORTED && ctx->status != NXMT_STATUS_ABORTED) {
+                        completed_workers += 1u;
+                    }
+                }
+            }
         }
     }
 
-    if (status == NXMT_STATUS_PASS && saw_failure) {
-        status = NXMT_STATUS_FAIL;
+    if (workers == 1u && completed_workers == 0) {
+        NxmtWorkerContext context;
+        init_worker_context(&context, &arena, mode, seed, 0, 1u);
+        nxmt_report_init(&context.report);
+        memset(&context.stats, 0, sizeof(context.stats));
+
+        nxmt_platform_print("Worker 1/1...\n");
+        context.status = nxmt_runner_run_pass(&arena, &context.config, &context.report, &context.stats);
+        total_stats.bytes_written += context.stats.bytes_written;
+        total_stats.bytes_verified += context.stats.bytes_verified;
+        nxmt_report_merge(&report, &context.report);
+        status = combine_worker_status(status, context.status);
+        if (context.status != NXMT_STATUS_UNSUPPORTED && context.status != NXMT_STATUS_ABORTED) {
+            completed_workers += 1u;
+        }
     }
 
     uint64_t elapsed = nxmt_platform_ticks_ms() - started;

@@ -45,3 +45,26 @@ void nxmt_report_record_error(
     report->error_count += 1u;
     report->bit_diff_or |= diff;
 }
+
+void nxmt_report_merge(NxmtReport *dst, const NxmtReport *src) {
+    if (src->error_count == 0) {
+        return;
+    }
+
+    if (!dst->has_first_error && src->has_first_error) {
+        dst->has_first_error = true;
+        dst->first = src->first;
+        dst->min_error_offset = src->min_error_offset;
+        dst->max_error_offset = src->max_error_offset;
+    } else {
+        if (src->min_error_offset < dst->min_error_offset) {
+            dst->min_error_offset = src->min_error_offset;
+        }
+        if (src->max_error_offset > dst->max_error_offset) {
+            dst->max_error_offset = src->max_error_offset;
+        }
+    }
+
+    dst->error_count += src->error_count;
+    dst->bit_diff_or |= src->bit_diff_or;
+}
