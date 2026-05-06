@@ -13,8 +13,7 @@ APP_AUTHOR := Codex
 APP_VERSION := 0.1.0
 
 CFLAGS := -g -Wall -Wextra -O2 -ffunction-sections -fdata-sections
-CFLAGS += $(ARCH) $(DEFINES)
-CFLAGS += $(foreach dir,$(INCLUDES),-I$(CURDIR)/$(dir))
+CFLAGS += $(ARCH) $(DEFINES) $(INCLUDE)
 CXXFLAGS := $(CFLAGS) -fno-rtti -fno-exceptions
 ASFLAGS := -g $(ARCH)
 LDFLAGS = -specs=$(DEVKITPRO)/libnx/switch.specs -g $(ARCH) -Wl,-Map,$(notdir $*.map)
@@ -27,7 +26,9 @@ export VPATH := $(foreach dir,$(SOURCES),$(CURDIR)/$(dir))
 export DEPSDIR := $(CURDIR)/$(BUILD)
 
 CFILES := $(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.c)))
-OFILES := $(CFILES:.c=.o)
+export OFILES := $(CFILES:.c=.o)
+export INCLUDE := $(foreach dir,$(INCLUDES),-I$(CURDIR)/$(dir))
+export LIBPATHS :=
 
 .PHONY: all clean $(BUILD)
 
