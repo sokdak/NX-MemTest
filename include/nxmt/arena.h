@@ -30,6 +30,7 @@ NxmtMemorySelection nxmt_select_system_memory_total(
     uint64_t process_total,
     bool has_override_heap,
     uint64_t override_heap_size);
+uint64_t nxmt_runtime_heap_reserve(uint64_t override_heap_size);
 uint64_t nxmt_percent_milli(uint64_t numerator, uint64_t denominator);
 uint64_t nxmt_split_block_start(uint64_t total_words, uint32_t worker_count, uint32_t worker_index);
 uint64_t nxmt_split_block_size(uint64_t total_words, uint32_t worker_count, uint32_t worker_index);

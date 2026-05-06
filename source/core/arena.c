@@ -124,6 +124,19 @@ NxmtMemorySelection nxmt_select_system_memory_total(
     return selection;
 }
 
+uint64_t nxmt_runtime_heap_reserve(uint64_t override_heap_size) {
+    if (override_heap_size < 4ull * NXMT_MIB_BYTES) {
+        return 0;
+    }
+    if (override_heap_size < 64ull * NXMT_MIB_BYTES) {
+        return align_down_u64(override_heap_size / 2u, NXMT_PAGE_BYTES);
+    }
+    if (override_heap_size < 512ull * NXMT_MIB_BYTES) {
+        return 16ull * NXMT_MIB_BYTES;
+    }
+    return 32ull * NXMT_MIB_BYTES;
+}
+
 uint64_t nxmt_percent_milli(uint64_t numerator, uint64_t denominator) {
     const uint64_t scale = 100000u;
     if (denominator == 0) {

@@ -5,13 +5,10 @@
 #include <switch.h>
 #include "nxmt/platform.h"
 
-/*
- * Keep the runtime heap out of OverrideHeap, but do not make it large enough
- * to inflate the NRO bss and trip launchers that map bss before entry.
- */
-static unsigned char g_internal_heap[1 * 1024 * 1024] __attribute__((aligned(4096)));
 static PadState g_pad;
 static bool g_pad_initialized;
+static void *g_test_arena_addr;
+static uint64_t g_test_arena_size;
 
 static void nxmt_platform_pad_init(void) {
     if (!g_pad_initialized) {
@@ -21,19 +18,60 @@ static void nxmt_platform_pad_init(void) {
     }
 }
 
+static bool align_up_uintptr(uintptr_t value, uint64_t align, uintptr_t *out) {
+    uint64_t mask = align - 1u;
+    if (value > UINTPTR_MAX - mask) {
+        return false;
+    }
+    *out = (value + mask) & ~(uintptr_t)mask;
+    return true;
+}
+
 void __libnx_initheap(void) {
     extern char *fake_heap_start;
     extern char *fake_heap_end;
-    fake_heap_start = (char*)g_internal_heap;
-    fake_heap_end = (char*)g_internal_heap + sizeof(g_internal_heap);
+    fake_heap_start = NULL;
+    fake_heap_end = NULL;
+    g_test_arena_addr = NULL;
+    g_test_arena_size = 0;
+
+    if (envHasHeapOverride()) {
+        uintptr_t raw_start = (uintptr_t)envGetHeapOverrideAddr();
+        uint64_t raw_size = envGetHeapOverrideSize();
+        uintptr_t aligned_start = 0;
+        if (align_up_uintptr(raw_start, NXMT_PAGE_BYTES, &aligned_start)) {
+            uint64_t prefix = (uint64_t)(aligned_start - raw_start);
+            if (raw_size > prefix) {
+                uint64_t usable_size = (raw_size - prefix) & ~(uint64_t)(NXMT_PAGE_BYTES - 1u);
+                uint64_t reserve = nxmt_runtime_heap_reserve(usable_size);
+                reserve &= ~(uint64_t)(NXMT_PAGE_BYTES - 1u);
+                if (reserve != 0 && usable_size > reserve) {
+                    fake_heap_start = (char*)aligned_start;
+                    fake_heap_end = (char*)aligned_start + reserve;
+                    g_test_arena_addr = (void*)(aligned_start + reserve);
+                    g_test_arena_size = usable_size - reserve;
+                    return;
+                }
+            }
+        }
+    }
+
+    void *heap = NULL;
+    uint64_t heap_size = 32ull * NXMT_MIB_BYTES;
+    if (R_SUCCEEDED(svcSetHeapSize(&heap, heap_size)) && heap != NULL) {
+        fake_heap_start = (char*)heap;
+        fake_heap_end = (char*)heap + heap_size;
+    }
 }
 
 void nxmt_platform_get_memory(NxmtPlatformMemory *out) {
     memset(out, 0, sizeof(*out));
     out->has_heap_override = envHasHeapOverride();
+    uint64_t raw_override_heap_size = 0;
     if (out->has_heap_override) {
-        out->override_heap_addr = envGetHeapOverrideAddr();
-        out->override_heap_size = envGetHeapOverrideSize();
+        out->override_heap_addr = g_test_arena_addr != NULL ? g_test_arena_addr : envGetHeapOverrideAddr();
+        out->override_heap_size = g_test_arena_size != 0 ? g_test_arena_size : envGetHeapOverrideSize();
+        raw_override_heap_size = envGetHeapOverrideSize();
     }
 
     uint64_t application_pool = 0;
@@ -63,7 +101,7 @@ void nxmt_platform_get_memory(NxmtPlatformMemory *out) {
         out->has_process_total_memory,
         out->process_total_memory,
         out->has_heap_override,
-        out->override_heap_size);
+        raw_override_heap_size);
     out->effective_total_memory = selected.total;
     out->effective_total_source = selected.source;
     out->extended_memory_detected = selected.extended_memory_detected;
@@ -103,6 +141,16 @@ void nxmt_platform_print(const char *fmt, ...) {
 }
 
 void nxmt_platform_debug_stage(const char *stage) {
+    mkdir("sdmc:/switch/NX-MemTest", 0777);
+    mkdir("sdmc:/switch/NX-MemTest/logs", 0777);
+
+    FILE *stdio_file = fopen("sdmc:/switch/NX-MemTest/logs/boot_stage.txt", "wb");
+    if (stdio_file != NULL) {
+        fprintf(stdio_file, "stage=%s\n", stage);
+        fclose(stdio_file);
+        return;
+    }
+
     FsFileSystem fs;
     if (R_FAILED(fsOpenSdCardFileSystem(&fs))) {
         return;

@@ -111,5 +111,12 @@ int main(void) {
         NXMT_MEMORY_SOURCE_OVERRIDE_HEAP,
         true);
 
+    failed |= expect_u64(nxmt_runtime_heap_reserve(0), 0u);
+    failed |= expect_u64(nxmt_runtime_heap_reserve(2ull * NXMT_MIB_BYTES), 0u);
+    failed |= expect_u64(nxmt_runtime_heap_reserve(32ull * NXMT_MIB_BYTES), 16ull * NXMT_MIB_BYTES);
+    failed |= expect_u64(nxmt_runtime_heap_reserve(128ull * NXMT_MIB_BYTES), 16ull * NXMT_MIB_BYTES);
+    failed |= expect_u64(nxmt_runtime_heap_reserve(512ull * NXMT_MIB_BYTES), 32ull * NXMT_MIB_BYTES);
+    failed |= expect_u64(nxmt_runtime_heap_reserve(8ull * NXMT_GIB_BYTES), 32ull * NXMT_MIB_BYTES);
+
     return failed;
 }
