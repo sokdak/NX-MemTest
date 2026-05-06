@@ -16,6 +16,7 @@ typedef struct NxmtRunConfig {
 typedef struct NxmtRunStats {
     uint64_t bytes_written;
     uint64_t bytes_verified;
+    uint64_t pressure_checksum;
     NxmtPhase current_phase;
 } NxmtRunStats;
 

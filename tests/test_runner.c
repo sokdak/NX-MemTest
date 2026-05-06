@@ -58,6 +58,21 @@ int main(void) {
     failed |= total_verified == arena.size * 3u ? 0 : 1;
     failed |= total_written == arena.size * 3u ? 0 : 1;
 
+    config.mode = NXMT_MODE_EXTREME;
+    config.worker_count = 2;
+    uint64_t pressure_checksums[2] = { 0, 0 };
+    for (uint32_t worker = 0; worker < config.worker_count; ++worker) {
+        config.worker_id = worker;
+        nxmt_report_init(&report);
+        status = nxmt_runner_run_pass(&arena, &config, &report, &stats);
+        failed |= status == NXMT_STATUS_PASS ? 0 : 1;
+        pressure_checksums[worker] = stats.pressure_checksum;
+    }
+    failed |= pressure_checksums[0] != 0 ? 0 : 1;
+    failed |= pressure_checksums[1] != 0 ? 0 : 1;
+    failed |= pressure_checksums[0] != pressure_checksums[1] ? 0 : 1;
+
+    config.mode = NXMT_MODE_QUICK;
     config.worker_count = 1;
     config.worker_id = 0;
     nxmt_report_init(&report);

@@ -88,7 +88,7 @@ typedef struct NxmtWorkerContext {
 } NxmtWorkerContext;
 
 static Thread g_worker_threads[3];
-static unsigned char g_worker_stacks[3][64 * 1024] __attribute__((aligned(16)));
+static unsigned char g_worker_stacks[3][64 * 1024] __attribute__((aligned(4096)));
 static NxmtWorkerContext g_worker_contexts[3];
 
 static void nxmt_worker_entry(void *arg) {
@@ -126,6 +126,22 @@ static void init_worker_context(
     ctx->config.worker_count = workers;
     ctx->config.inject_mismatch = false;
     ctx->status = NXMT_STATUS_UNSUPPORTED;
+}
+
+static void merge_worker_context(
+    const NxmtWorkerContext *ctx,
+    NxmtReport *report,
+    NxmtRunStats *total_stats,
+    NxmtStatus *status,
+    uint32_t *completed_workers) {
+    total_stats->bytes_written += ctx->stats.bytes_written;
+    total_stats->bytes_verified += ctx->stats.bytes_verified;
+    total_stats->pressure_checksum ^= ctx->stats.pressure_checksum;
+    nxmt_report_merge(report, &ctx->report);
+    *status = combine_worker_status(*status, ctx->status);
+    if (ctx->status != NXMT_STATUS_UNSUPPORTED && ctx->status != NXMT_STATUS_ABORTED) {
+        *completed_workers += 1u;
+    }
 }
 
 static void format_report(
@@ -272,13 +288,38 @@ int main(int argc, char **argv) {
             }
 
             if (!use_threaded_workers) {
+                NxmtReport partial_report;
+                NxmtRunStats partial_stats;
+                NxmtStatus partial_status = NXMT_STATUS_PASS;
+                uint32_t partial_completed_workers = 0;
+                nxmt_report_init(&partial_report);
+                memset(&partial_stats, 0, sizeof(partial_stats));
+
                 for (uint32_t worker = 0; worker < started_threads; ++worker) {
                     threadWaitForExit(&g_worker_threads[worker]);
                 }
                 for (uint32_t worker = 0; worker < created_threads; ++worker) {
                     threadClose(&g_worker_threads[worker]);
                 }
-                workers = 1u;
+
+                for (uint32_t worker = 0; worker < started_threads; ++worker) {
+                    merge_worker_context(
+                        &g_worker_contexts[worker],
+                        &partial_report,
+                        &partial_stats,
+                        &partial_status,
+                        &partial_completed_workers);
+                }
+
+                if (partial_status != NXMT_STATUS_PASS || partial_report.error_count > 0) {
+                    total_stats = partial_stats;
+                    nxmt_report_merge(&report, &partial_report);
+                    status = combine_worker_status(status, partial_status);
+                    completed_workers = partial_completed_workers;
+                } else {
+                    nxmt_platform_print("Thread start failed; retrying single-worker fallback.\n");
+                    workers = 1u;
+                }
             } else {
                 for (uint32_t worker = 0; worker < workers; ++worker) {
                     threadWaitForExit(&g_worker_threads[worker]);
@@ -286,14 +327,7 @@ int main(int argc, char **argv) {
                 }
 
                 for (uint32_t worker = 0; worker < workers; ++worker) {
-                    NxmtWorkerContext *ctx = &g_worker_contexts[worker];
-                    total_stats.bytes_written += ctx->stats.bytes_written;
-                    total_stats.bytes_verified += ctx->stats.bytes_verified;
-                    nxmt_report_merge(&report, &ctx->report);
-                    status = combine_worker_status(status, ctx->status);
-                    if (ctx->status != NXMT_STATUS_UNSUPPORTED && ctx->status != NXMT_STATUS_ABORTED) {
-                        completed_workers += 1u;
-                    }
+                    merge_worker_context(&g_worker_contexts[worker], &report, &total_stats, &status, &completed_workers);
                 }
             }
         }
