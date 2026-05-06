@@ -1,3 +1,5 @@
+#include <stdint.h>
+
 #include "nxmt/runner.h"
 
 static const NxmtPhase quick_phases[] = {
@@ -27,6 +29,10 @@ static NxmtPhase nxmt_phase_for_mode(NxmtMode mode, uint32_t index) {
         return quick_phases[index];
     }
     return memory_load_phases[index];
+}
+
+static bool nxmt_runner_is_aligned(const NxmtArena *arena) {
+    return ((uintptr_t)arena->base % _Alignof(uint64_t)) == 0;
 }
 
 static void nxmt_write_phase(uint64_t *words, uint64_t start, uint64_t count, NxmtPhase phase, const NxmtRunConfig *config) {
@@ -67,11 +73,18 @@ NxmtStatus nxmt_runner_run_pass(
     if (arena == 0 || arena->base == 0 || arena->words == 0 || config == 0 || report == 0 || stats == 0) {
         return NXMT_STATUS_UNSUPPORTED;
     }
+    if (config->worker_count == 0 || config->worker_id >= config->worker_count) {
+        return NXMT_STATUS_UNSUPPORTED;
+    }
+    if (!nxmt_runner_is_aligned(arena)) {
+        return NXMT_STATUS_UNSUPPORTED;
+    }
 
     stats->bytes_written = 0;
     stats->bytes_verified = 0;
     stats->current_phase = NXMT_PHASE_FIXED_A;
 
+    uint64_t initial_errors = report->error_count;
     uint64_t start = nxmt_split_block_start(arena->words, config->worker_count, config->worker_id);
     uint64_t count = nxmt_split_block_size(arena->words, config->worker_count, config->worker_id);
     uint64_t *words = (uint64_t*)arena->base;
@@ -86,5 +99,5 @@ NxmtStatus nxmt_runner_run_pass(
         stats->bytes_verified += count * NXMT_WORD_BYTES;
     }
 
-    return report->error_count == 0 ? NXMT_STATUS_PASS : NXMT_STATUS_FAIL;
+    return report->error_count != initial_errors ? NXMT_STATUS_FAIL : NXMT_STATUS_PASS;
 }
