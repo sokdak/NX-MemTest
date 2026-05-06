@@ -5,6 +5,18 @@ static int expect_u64(uint64_t got, uint64_t want) {
     return got == want ? 0 : 1;
 }
 
+static int expect_memory_selection(
+    NxmtMemorySelection got,
+    uint64_t total,
+    NxmtMemorySource source,
+    bool extended_memory_detected) {
+    int failed = 0;
+    failed |= expect_u64(got.total, total);
+    failed |= got.source == source ? 0 : 1;
+    failed |= got.extended_memory_detected == extended_memory_detected ? 0 : 1;
+    return failed;
+}
+
 int main(void) {
     NxmtArena arena = nxmt_arena_from_range((void*)0x1003u, 0x5005u);
     int failed = 0;
@@ -39,16 +51,65 @@ int main(void) {
     failed |= expect_u64(nxmt_split_block_start(1001, 4, 3), 751u);
     failed |= expect_u64(nxmt_split_block_size(1001, 4, 3), 250u);
 
-    NxmtMemorySelection selected = nxmt_select_system_memory_total(
-        true,
-        4ull * NXMT_GIB_BYTES,
-        true,
+    failed |= expect_memory_selection(
+        nxmt_select_system_memory_total(false, 0, false, 0, false, 0),
+        0,
+        NXMT_MEMORY_SOURCE_NONE,
+        false);
+
+    failed |= expect_memory_selection(
+        nxmt_select_system_memory_total(true, 0, true, 0, true, 0),
+        0,
+        NXMT_MEMORY_SOURCE_NONE,
+        false);
+
+    failed |= expect_memory_selection(
+        nxmt_select_system_memory_total(
+            true,
+            4ull * NXMT_GIB_BYTES,
+            true,
+            8ull * NXMT_GIB_BYTES,
+            true,
+            6ull * NXMT_GIB_BYTES),
+        8ull * NXMT_GIB_BYTES,
+        NXMT_MEMORY_SOURCE_PROCESS_TOTAL,
+        true);
+
+    failed |= expect_memory_selection(
+        nxmt_select_system_memory_total(
+            true,
+            8ull * NXMT_GIB_BYTES,
+            true,
+            6ull * NXMT_GIB_BYTES,
+            true,
+            4ull * NXMT_GIB_BYTES),
+        8ull * NXMT_GIB_BYTES,
+        NXMT_MEMORY_SOURCE_PHYSICAL_POOLS,
+        true);
+
+    failed |= expect_memory_selection(
+        nxmt_select_system_memory_total(
+            true,
+            8ull * NXMT_GIB_BYTES,
+            true,
+            6ull * NXMT_GIB_BYTES,
+            true,
+            10ull * NXMT_GIB_BYTES),
+        10ull * NXMT_GIB_BYTES,
+        NXMT_MEMORY_SOURCE_OVERRIDE_HEAP,
+        true);
+
+    failed |= expect_memory_selection(
+        nxmt_select_system_memory_total(
+            true,
+            5ull * NXMT_GIB_BYTES,
+            true,
+            3ull * NXMT_GIB_BYTES,
+            true,
+            6ull * NXMT_GIB_BYTES),
         6ull * NXMT_GIB_BYTES,
-        true,
-        8ull * NXMT_GIB_BYTES);
-    failed |= expect_u64(selected.total, 8ull * NXMT_GIB_BYTES);
-    failed |= selected.source == NXMT_MEMORY_SOURCE_OVERRIDE_HEAP ? 0 : 1;
-    failed |= selected.extended_memory_detected ? 0 : 1;
+        NXMT_MEMORY_SOURCE_OVERRIDE_HEAP,
+        true);
 
     return failed;
 }
