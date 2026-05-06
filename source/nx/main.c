@@ -34,6 +34,20 @@ static const char *status_name(NxmtStatus status) {
     return "UNKNOWN";
 }
 
+static const char *memory_source_name(NxmtMemorySource source) {
+    switch (source) {
+    case NXMT_MEMORY_SOURCE_PHYSICAL_POOLS:
+        return "physical-pools";
+    case NXMT_MEMORY_SOURCE_PROCESS_TOTAL:
+        return "process-total";
+    case NXMT_MEMORY_SOURCE_OVERRIDE_HEAP:
+        return "override-heap";
+    case NXMT_MEMORY_SOURCE_NONE:
+        return "none";
+    }
+    return "unknown";
+}
+
 static void print_size_line(const char *label, uint64_t bytes) {
     nxmt_platform_print("%s: %llu MiB\n", label, (unsigned long long)(bytes / NXMT_MIB_BYTES));
 }
@@ -165,7 +179,7 @@ static void format_report(
     bool thread_fallback,
     bool stop_requested,
     uint64_t elapsed_ms) {
-    uint64_t coverage = memory->has_switch_total ? nxmt_percent_milli(arena->size, memory->switch_total_memory) : 0;
+    uint64_t coverage = memory->has_effective_total ? nxmt_percent_milli(arena->size, memory->effective_total_memory) : 0;
 
     snprintf(out, out_size,
         "NX-MemTest Report\n"
@@ -177,7 +191,9 @@ static void format_report(
         "Thread Fallback: %s\n"
         "Stop Requested: %s\n"
         "Test Arena MiB: %llu\n"
-        "Switch Total MiB: %llu\n"
+        "Effective Total MiB: %llu\n"
+        "Total Source: %s\n"
+        "Extended Memory Detected: %s\n"
         "Physical Coverage MilliPercent: %llu\n"
         "Bytes Written: %llu\n"
         "Bytes Verified: %llu\n"
@@ -195,7 +211,9 @@ static void format_report(
         thread_fallback ? "yes" : "no",
         stop_requested ? "yes" : "no",
         (unsigned long long)(arena->size / NXMT_MIB_BYTES),
-        (unsigned long long)(memory->has_switch_total ? memory->switch_total_memory / NXMT_MIB_BYTES : 0),
+        (unsigned long long)(memory->has_effective_total ? memory->effective_total_memory / NXMT_MIB_BYTES : 0),
+        memory_source_name(memory->effective_total_source),
+        memory->extended_memory_detected ? "yes" : "no",
         (unsigned long long)coverage,
         (unsigned long long)stats->bytes_written,
         (unsigned long long)stats->bytes_verified,
@@ -231,11 +249,15 @@ int main(int argc, char **argv) {
 
     NxmtArena arena = nxmt_arena_from_range(memory.override_heap_addr, memory.override_heap_size);
     print_size_line("Test Arena", arena.size);
-    if (memory.has_switch_total) {
-        print_size_line("Switch Total", memory.switch_total_memory);
-        print_percent("Physical Coverage", nxmt_percent_milli(arena.size, memory.switch_total_memory));
+    if (memory.has_effective_total) {
+        print_size_line("Effective Total", memory.effective_total_memory);
+        nxmt_platform_print("Total Source: %s\n", memory_source_name(memory.effective_total_source));
+        nxmt_platform_print("Extended Memory: %s\n", memory.extended_memory_detected ? "detected" : "no");
+        print_percent("Physical Coverage", nxmt_percent_milli(arena.size, memory.effective_total_memory));
     } else {
-        nxmt_platform_print("Switch Total: unavailable\n");
+        nxmt_platform_print("Effective Total: unavailable\n");
+        nxmt_platform_print("Total Source: none\n");
+        nxmt_platform_print("Extended Memory: no\n");
         nxmt_platform_print("Physical Coverage: unavailable\n");
     }
 

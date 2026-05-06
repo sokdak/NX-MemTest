@@ -32,7 +32,6 @@ void nxmt_platform_get_memory(NxmtPlatformMemory *out) {
         out->override_heap_size = envGetHeapOverrideSize();
     }
 
-    uint64_t total = 0;
     uint64_t application_pool = 0;
     uint64_t applet_pool = 0;
     uint64_t system_pool = 0;
@@ -42,10 +41,31 @@ void nxmt_platform_get_memory(NxmtPlatformMemory *out) {
     Result rc_system = svcGetSystemInfo(&system_pool, SystemInfoType_TotalPhysicalMemorySize, INVALID_HANDLE, PhysicalMemorySystemInfo_System);
     Result rc_unsafe = svcGetSystemInfo(&unsafe_pool, SystemInfoType_TotalPhysicalMemorySize, INVALID_HANDLE, PhysicalMemorySystemInfo_SystemUnsafe);
     if (R_SUCCEEDED(rc_application) && R_SUCCEEDED(rc_applet) && R_SUCCEEDED(rc_system) && R_SUCCEEDED(rc_unsafe)) {
-        total = application_pool + applet_pool + system_pool + unsafe_pool;
-        out->switch_total_memory = total;
-        out->has_switch_total = total != 0;
+        uint64_t total = application_pool + applet_pool + system_pool + unsafe_pool;
+        out->physical_pools_total = total;
+        out->has_physical_pools_total = total != 0;
     }
+
+    uint64_t process_total = 0;
+    Result rc_process = svcGetInfo(&process_total, InfoType_TotalMemorySize, CUR_PROCESS_HANDLE, 0);
+    if (R_SUCCEEDED(rc_process)) {
+        out->process_total_memory = process_total;
+        out->has_process_total_memory = process_total != 0;
+    }
+
+    NxmtMemorySelection selected = nxmt_select_system_memory_total(
+        out->has_physical_pools_total,
+        out->physical_pools_total,
+        out->has_process_total_memory,
+        out->process_total_memory,
+        out->has_heap_override,
+        out->override_heap_size);
+    out->effective_total_memory = selected.total;
+    out->effective_total_source = selected.source;
+    out->extended_memory_detected = selected.extended_memory_detected;
+    out->has_effective_total = selected.source != NXMT_MEMORY_SOURCE_NONE;
+    out->switch_total_memory = selected.total;
+    out->has_switch_total = out->has_effective_total;
 }
 
 uint64_t nxmt_platform_seed64(void) {

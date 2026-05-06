@@ -89,6 +89,41 @@ bool nxmt_arena_is_large_enough(const NxmtArena *arena, uint64_t minimum_bytes) 
     return arena != 0 && arena->size >= minimum_bytes;
 }
 
+static void select_memory_source(
+    NxmtMemorySelection *selection,
+    bool available,
+    uint64_t total,
+    NxmtMemorySource source) {
+    if (!available || total == 0) {
+        return;
+    }
+    if (total > 4ull * NXMT_GIB_BYTES) {
+        selection->extended_memory_detected = true;
+    }
+    if (selection->source == NXMT_MEMORY_SOURCE_NONE || total > selection->total) {
+        selection->total = total;
+        selection->source = source;
+    }
+}
+
+NxmtMemorySelection nxmt_select_system_memory_total(
+    bool has_physical_pools_total,
+    uint64_t physical_pools_total,
+    bool has_process_total,
+    uint64_t process_total,
+    bool has_override_heap,
+    uint64_t override_heap_size) {
+    NxmtMemorySelection selection;
+    selection.total = 0;
+    selection.source = NXMT_MEMORY_SOURCE_NONE;
+    selection.extended_memory_detected = false;
+
+    select_memory_source(&selection, has_physical_pools_total, physical_pools_total, NXMT_MEMORY_SOURCE_PHYSICAL_POOLS);
+    select_memory_source(&selection, has_process_total, process_total, NXMT_MEMORY_SOURCE_PROCESS_TOTAL);
+    select_memory_source(&selection, has_override_heap, override_heap_size, NXMT_MEMORY_SOURCE_OVERRIDE_HEAP);
+    return selection;
+}
+
 uint64_t nxmt_percent_milli(uint64_t numerator, uint64_t denominator) {
     const uint64_t scale = 100000u;
     if (denominator == 0) {

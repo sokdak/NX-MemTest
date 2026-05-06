@@ -14,10 +14,19 @@ It is designed for full-memory homebrew execution through hbmenu title override.
 
 - System Stress Pass: reaches 100% when the configured arena completes a pass.
 - Verified Arena: bytes directly written, read, and compared.
-- Physical Coverage: test arena size divided by Switch total physical memory.
+- Effective Total: largest valid memory total reported by physical pools,
+  process total memory, or OverrideHeap size.
+- Total Source: which source supplied Effective Total.
+- Extended Memory: shown when any valid reported total exceeds 4 GiB.
+- Physical Coverage: test arena size divided by Effective Total.
 
 NX-MemTest does not directly verify system-only memory pools. Those regions are
 outside the normal NRO addressable arena.
+
+NX-MemTest does not assume retail 4 GiB memory. On 8GB or other
+extended-memory patched devices, it uses the full OverrideHeap test arena
+provided by the environment and reports extended memory when the platform
+exposes a total above 4 GiB through any supported source.
 
 ## Host Tests
 
