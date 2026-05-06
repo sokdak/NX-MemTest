@@ -5,7 +5,7 @@ endif
 include $(DEVKITPRO)/libnx/switch_rules
 
 TARGET := NX-MemTest
-BUILD := build/nx
+BUILD := build
 SOURCES := source/core source/nx
 INCLUDES := include
 APP_TITLE := NX-MemTest
@@ -29,7 +29,7 @@ export DEPSDIR := $(CURDIR)/$(BUILD)
 CFILES := $(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.c)))
 OFILES := $(CFILES:.c=.o)
 
-.PHONY: all clean
+.PHONY: all clean $(BUILD)
 
 all: $(BUILD)
 

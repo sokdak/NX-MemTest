@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <switch.h>
 #include "nxmt/arena.h"
 #include "nxmt/platform.h"
 #include "nxmt/runner.h"
@@ -39,7 +40,7 @@ int main(int argc, char **argv) {
     }
 
     NxmtReport report;
-    NxmtRunStats stats;
+    NxmtRunStats stats = {0};
     NxmtRunConfig config;
     nxmt_report_init(&report);
 
@@ -55,12 +56,19 @@ int main(int argc, char **argv) {
     NxmtStatus status = nxmt_runner_run_pass(&arena, &config, &report, &stats);
     uint64_t elapsed = nxmt_platform_ticks_ms() - started;
 
-    nxmt_platform_print("System Stress Pass: 100.000%%\n");
-    nxmt_platform_print("Verified Arena: 100.000%% of %llu MiB\n", (unsigned long long)(arena.size / NXMT_MIB_BYTES));
-    nxmt_platform_print("Tested: %llu MiB\n", (unsigned long long)(stats.bytes_verified / NXMT_MIB_BYTES));
-    nxmt_platform_print("Elapsed: %llu ms\n", (unsigned long long)elapsed);
-    nxmt_platform_print("Errors: %llu\n", (unsigned long long)report.error_count);
-    nxmt_platform_print("Status: %s\n", status == NXMT_STATUS_PASS ? "PASS" : "FAIL");
+    if (status == NXMT_STATUS_UNSUPPORTED) {
+        nxmt_platform_print("Unsupported test arena.\n");
+        nxmt_platform_print("OverrideHeap arena is invalid or unsupported for this build.\n");
+        nxmt_platform_print("Elapsed: %llu ms\n", (unsigned long long)elapsed);
+        nxmt_platform_print("Status: UNSUPPORTED\n");
+    } else {
+        nxmt_platform_print("System Stress Pass: 100.000%%\n");
+        nxmt_platform_print("Verified Arena: 100.000%% of %llu MiB\n", (unsigned long long)(arena.size / NXMT_MIB_BYTES));
+        nxmt_platform_print("Tested: %llu MiB\n", (unsigned long long)(stats.bytes_verified / NXMT_MIB_BYTES));
+        nxmt_platform_print("Elapsed: %llu ms\n", (unsigned long long)elapsed);
+        nxmt_platform_print("Errors: %llu\n", (unsigned long long)report.error_count);
+        nxmt_platform_print("Status: %s\n", status == NXMT_STATUS_PASS ? "PASS" : "FAIL");
+    }
     nxmt_platform_print("\nPress PLUS to exit.\n");
 
     while (appletMainLoop() && !nxmt_platform_should_quit()) {
