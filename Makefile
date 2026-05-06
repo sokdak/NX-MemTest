@@ -1,0 +1,53 @@
+ifeq ($(strip $(DEVKITPRO)),)
+$(error "Please set DEVKITPRO in your environment. export DEVKITPRO=<path to devkitpro>")
+endif
+
+include $(DEVKITPRO)/libnx/switch_rules
+
+TARGET := NX-MemTest
+BUILD := build/nx
+SOURCES := source/core source/nx
+INCLUDES := include
+APP_TITLE := NX-MemTest
+APP_AUTHOR := Codex
+APP_VERSION := 0.1.0
+
+CFLAGS := -g -Wall -Wextra -O2 -ffunction-sections -fdata-sections
+CFLAGS += $(ARCH) $(DEFINES)
+CFLAGS += $(foreach dir,$(INCLUDES),-I$(CURDIR)/$(dir))
+CXXFLAGS := $(CFLAGS) -fno-rtti -fno-exceptions
+ASFLAGS := -g $(ARCH)
+LDFLAGS = -specs=$(DEVKITPRO)/libnx/switch.specs -g $(ARCH) -Wl,-Map,$(notdir $*.map)
+LIBS := -lnx
+
+ifneq ($(BUILD),$(notdir $(CURDIR)))
+export OUTPUT := $(CURDIR)/$(TARGET)
+export TOPDIR := $(CURDIR)
+export VPATH := $(foreach dir,$(SOURCES),$(CURDIR)/$(dir))
+export DEPSDIR := $(CURDIR)/$(BUILD)
+
+CFILES := $(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.c)))
+OFILES := $(CFILES:.c=.o)
+
+.PHONY: all clean
+
+all: $(BUILD)
+
+$(BUILD):
+	@[ -d $@ ] || mkdir -p $@
+	@$(MAKE) --no-print-directory -C $(BUILD) -f $(CURDIR)/Makefile
+
+clean:
+	@rm -rf $(BUILD) $(TARGET).elf $(TARGET).nro $(TARGET).nacp $(TARGET).map
+
+else
+
+DEPENDS := $(OFILES:.o=.d)
+
+$(OUTPUT).nro: $(OUTPUT).elf
+
+$(OUTPUT).elf: $(OFILES)
+
+-include $(DEPENDS)
+
+endif
