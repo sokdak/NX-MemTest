@@ -1,4 +1,5 @@
 #include <stdint.h>
+#include <string.h>
 
 #include "nxmt/runner.h"
 
@@ -35,20 +36,31 @@ static bool nxmt_runner_is_aligned(const NxmtArena *arena) {
     return ((uintptr_t)arena->base % _Alignof(uint64_t)) == 0;
 }
 
-static void nxmt_write_phase(uint64_t *words, uint64_t start, uint64_t count, NxmtPhase phase, const NxmtRunConfig *config) {
+static void nxmt_store_word(uint8_t *base, uint64_t word_index, uint64_t value) {
+    memcpy(base + word_index * NXMT_WORD_BYTES, &value, sizeof(value));
+}
+
+static uint64_t nxmt_load_word(const uint8_t *base, uint64_t word_index) {
+    uint64_t value;
+    memcpy(&value, base + word_index * NXMT_WORD_BYTES, sizeof(value));
+    return value;
+}
+
+static void nxmt_write_phase(uint8_t *base, uint64_t start, uint64_t count, NxmtPhase phase, const NxmtRunConfig *config) {
     for (uint64_t i = 0; i < count; ++i) {
         uint64_t word_index = start + i;
         uint64_t offset = word_index * NXMT_WORD_BYTES;
-        words[word_index] = nxmt_expected_value(config->seed, phase, config->pass, offset);
+        nxmt_store_word(base, word_index, nxmt_expected_value(config->seed, phase, config->pass, offset));
     }
 
     if (config->inject_mismatch && count > 0) {
-        words[start] ^= 0x100u;
+        uint64_t value = nxmt_load_word(base, start);
+        nxmt_store_word(base, start, value ^ 0x100u);
     }
 }
 
 static void nxmt_verify_phase(
-    uint64_t *words,
+    const uint8_t *base,
     uint64_t start,
     uint64_t count,
     NxmtPhase phase,
@@ -58,7 +70,7 @@ static void nxmt_verify_phase(
         uint64_t word_index = start + i;
         uint64_t offset = word_index * NXMT_WORD_BYTES;
         uint64_t expected = nxmt_expected_value(config->seed, phase, config->pass, offset);
-        uint64_t actual = words[word_index];
+        uint64_t actual = nxmt_load_word(base, word_index);
         if (actual != expected) {
             nxmt_report_record_error(report, config->mode, phase, config->seed, config->pass, config->worker_id, offset, expected, actual);
         }
@@ -87,15 +99,15 @@ NxmtStatus nxmt_runner_run_pass(
     uint64_t initial_errors = report->error_count;
     uint64_t start = nxmt_split_block_start(arena->words, config->worker_count, config->worker_id);
     uint64_t count = nxmt_split_block_size(arena->words, config->worker_count, config->worker_id);
-    uint64_t *words = (uint64_t*)arena->base;
+    uint8_t *base = arena->base;
     uint32_t phase_count = nxmt_phase_count_for_mode(config->mode);
 
     for (uint32_t p = 0; p < phase_count; ++p) {
         NxmtPhase phase = nxmt_phase_for_mode(config->mode, p);
         stats->current_phase = phase;
-        nxmt_write_phase(words, start, count, phase, config);
+        nxmt_write_phase(base, start, count, phase, config);
         stats->bytes_written += count * NXMT_WORD_BYTES;
-        nxmt_verify_phase(words, start, count, phase, config, report);
+        nxmt_verify_phase(base, start, count, phase, config, report);
         stats->bytes_verified += count * NXMT_WORD_BYTES;
     }
 
