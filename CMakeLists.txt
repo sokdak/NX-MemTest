@@ -13,6 +13,7 @@ add_library(nxmt_core
 target_include_directories(nxmt_core PUBLIC include)
 target_sources(nxmt_core PRIVATE source/core/arena.c)
 target_sources(nxmt_core PRIVATE source/core/report.c)
+target_sources(nxmt_core PRIVATE source/core/runner.c)
 
 add_executable(test_smoke tests/test_smoke.c)
 target_link_libraries(test_smoke PRIVATE nxmt_core)
@@ -29,3 +30,7 @@ add_test(NAME test_arena COMMAND test_arena)
 add_executable(test_report tests/test_report.c)
 target_link_libraries(test_report PRIVATE nxmt_core)
 add_test(NAME test_report COMMAND test_report)
+
+add_executable(test_runner tests/test_runner.c)
+target_link_libraries(test_runner PRIVATE nxmt_core)
+add_test(NAME test_runner COMMAND test_runner)

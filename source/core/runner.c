@@ -1,0 +1,90 @@
+#include "nxmt/runner.h"
+
+static const NxmtPhase quick_phases[] = {
+    NXMT_PHASE_FIXED_A,
+    NXMT_PHASE_ADDRESS,
+    NXMT_PHASE_RANDOM
+};
+
+static const NxmtPhase memory_load_phases[] = {
+    NXMT_PHASE_FIXED_A,
+    NXMT_PHASE_FIXED_5,
+    NXMT_PHASE_CHECKER,
+    NXMT_PHASE_ADDRESS,
+    NXMT_PHASE_RANDOM,
+    NXMT_PHASE_WALKING
+};
+
+static uint32_t nxmt_phase_count_for_mode(NxmtMode mode) {
+    if (mode == NXMT_MODE_QUICK) {
+        return (uint32_t)(sizeof(quick_phases) / sizeof(quick_phases[0]));
+    }
+    return (uint32_t)(sizeof(memory_load_phases) / sizeof(memory_load_phases[0]));
+}
+
+static NxmtPhase nxmt_phase_for_mode(NxmtMode mode, uint32_t index) {
+    if (mode == NXMT_MODE_QUICK) {
+        return quick_phases[index];
+    }
+    return memory_load_phases[index];
+}
+
+static void nxmt_write_phase(uint64_t *words, uint64_t start, uint64_t count, NxmtPhase phase, const NxmtRunConfig *config) {
+    for (uint64_t i = 0; i < count; ++i) {
+        uint64_t word_index = start + i;
+        uint64_t offset = word_index * NXMT_WORD_BYTES;
+        words[word_index] = nxmt_expected_value(config->seed, phase, config->pass, offset);
+    }
+
+    if (config->inject_mismatch && count > 0) {
+        words[start] ^= 0x100u;
+    }
+}
+
+static void nxmt_verify_phase(
+    uint64_t *words,
+    uint64_t start,
+    uint64_t count,
+    NxmtPhase phase,
+    const NxmtRunConfig *config,
+    NxmtReport *report) {
+    for (uint64_t i = 0; i < count; ++i) {
+        uint64_t word_index = start + i;
+        uint64_t offset = word_index * NXMT_WORD_BYTES;
+        uint64_t expected = nxmt_expected_value(config->seed, phase, config->pass, offset);
+        uint64_t actual = words[word_index];
+        if (actual != expected) {
+            nxmt_report_record_error(report, config->mode, phase, config->seed, config->pass, config->worker_id, offset, expected, actual);
+        }
+    }
+}
+
+NxmtStatus nxmt_runner_run_pass(
+    const NxmtArena *arena,
+    const NxmtRunConfig *config,
+    NxmtReport *report,
+    NxmtRunStats *stats) {
+    if (arena == 0 || arena->base == 0 || arena->words == 0 || config == 0 || report == 0 || stats == 0) {
+        return NXMT_STATUS_UNSUPPORTED;
+    }
+
+    stats->bytes_written = 0;
+    stats->bytes_verified = 0;
+    stats->current_phase = NXMT_PHASE_FIXED_A;
+
+    uint64_t start = nxmt_split_block_start(arena->words, config->worker_count, config->worker_id);
+    uint64_t count = nxmt_split_block_size(arena->words, config->worker_count, config->worker_id);
+    uint64_t *words = (uint64_t*)arena->base;
+    uint32_t phase_count = nxmt_phase_count_for_mode(config->mode);
+
+    for (uint32_t p = 0; p < phase_count; ++p) {
+        NxmtPhase phase = nxmt_phase_for_mode(config->mode, p);
+        stats->current_phase = phase;
+        nxmt_write_phase(words, start, count, phase, config);
+        stats->bytes_written += count * NXMT_WORD_BYTES;
+        nxmt_verify_phase(words, start, count, phase, config, report);
+        stats->bytes_verified += count * NXMT_WORD_BYTES;
+    }
+
+    return report->error_count == 0 ? NXMT_STATUS_PASS : NXMT_STATUS_FAIL;
+}
