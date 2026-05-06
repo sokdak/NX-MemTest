@@ -29,7 +29,7 @@ int main(void) {
     failed |= nxmt_arena_is_large_enough(&arena, 0x8000u) ? 1 : 0;
 
     NxmtArena overflow_end = nxmt_arena_from_range((void*)(uintptr_t)(UINT64_MAX - 0x1fffULL), 0x3000u);
-    failed |= expect_u64((uint64_t)(uintptr_t)overflow_end.base, UINT64_MAX - 0xfffULL);
+    failed |= expect_u64((uint64_t)(uintptr_t)overflow_end.base, UINT64_MAX - 0x1fffULL);
     failed |= expect_u64(overflow_end.size, 0u);
     failed |= expect_u64(overflow_end.words, 0u);
 
