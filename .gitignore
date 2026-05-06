@@ -1,2 +1,11 @@
 .worktrees
 .worktrees/
+build/
+*.elf
+*.nro
+*.nacp
+*.map
+*.o
+*.d
+.vs/
+.vscode/
