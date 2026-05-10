@@ -124,6 +124,10 @@ NxmtMemorySelection nxmt_select_system_memory_total(
     return selection;
 }
 
+NxmtMemorySelection nxmt_select_launch_safe_memory_total(bool has_override_heap, uint64_t override_heap_size) {
+    return nxmt_select_system_memory_total(false, 0, false, 0, has_override_heap, override_heap_size);
+}
+
 uint64_t nxmt_runtime_heap_reserve(uint64_t override_heap_size) {
     if (override_heap_size < 4ull * NXMT_MIB_BYTES) {
         return 0;
