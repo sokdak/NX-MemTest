@@ -1,9 +1,5 @@
 #include "nxmt/patterns.h"
 
-static uint64_t nxmt_rotl64(uint64_t value, unsigned shift) {
-    return (value << shift) | (value >> (64u - shift));
-}
-
 uint64_t nxmt_make_seed(uint32_t high, uint32_t low) {
     return ((uint64_t)high << 32) | (uint64_t)low;
 }
@@ -26,16 +22,16 @@ uint64_t nxmt_expected_value(uint64_t seed, NxmtPhase phase, uint64_t pass, uint
     case NXMT_PHASE_CHECKER:
         return (word_index & 1u) ? 0x5555555555555555ull : 0xaaaaaaaaaaaaaaaaull;
     case NXMT_PHASE_ADDRESS:
-        return nxmt_mix64(seed ^ nxmt_rotl64(offset, 17) ^ (pass * 0x100000001b3ull));
+        return offset ^ seed ^ (pass * 0x100000001b3ull);
     case NXMT_PHASE_RANDOM:
-        return nxmt_mix64(seed ^ nxmt_mix64(pass) ^ nxmt_mix64(word_index));
+        return __builtin_bswap64(word_index) ^ seed ^ (pass * 0x9e3779b97f4a7c15ull);
     case NXMT_PHASE_WALKING: {
         unsigned bit = (unsigned)((word_index + pass) & 63u);
         return 1ull << bit;
     }
     }
 
-    return nxmt_mix64(seed ^ offset ^ pass);
+    return seed ^ offset ^ pass;
 }
 
 uint64_t nxmt_next_offset(uint64_t seed, uint64_t pass, uint64_t index, uint64_t arena_words) {

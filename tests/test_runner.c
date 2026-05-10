@@ -20,6 +20,7 @@ int main(void) {
     config.worker_count = 1;
     config.inject_mismatch = false;
     config.stop_requested = NULL;
+    config.progress_bytes = NULL;
 
     nxmt_report_init(&report);
     NxmtStatus status = nxmt_runner_run_pass(&arena, &config, &report, &stats);

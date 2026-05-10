@@ -14,6 +14,7 @@ typedef struct NxmtRunConfig {
     uint32_t worker_count;
     bool inject_mismatch;
     atomic_bool *stop_requested;
+    atomic_uint_fast64_t *progress_bytes;
 } NxmtRunConfig;
 
 typedef struct NxmtRunStats {
@@ -28,3 +29,5 @@ NxmtStatus nxmt_runner_run_pass(
     const NxmtRunConfig *config,
     NxmtReport *report,
     NxmtRunStats *stats);
+
+uint32_t nxmt_runner_phase_count(NxmtMode mode);

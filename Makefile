@@ -15,7 +15,7 @@ APP_AUTHOR := Codex
 APP_VERSION := 0.1.0
 
 ARCH := -march=armv8-a+crc+crypto -mtune=cortex-a57 -mtp=soft -fPIE
-CFLAGS := -g -Wall -Wextra -O2 -ffunction-sections -fdata-sections
+CFLAGS := -g -Wall -Wextra -O3 -ffunction-sections -fdata-sections -ftree-vectorize
 CFLAGS += $(ARCH) $(DEFINES) $(INCLUDE)
 CXXFLAGS := $(CFLAGS) -fno-rtti -fno-exceptions
 ASFLAGS := -g $(ARCH)
