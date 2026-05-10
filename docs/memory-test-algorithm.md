@@ -118,6 +118,24 @@ NEON loop (two `uint64x2_t` registers) that writes/verifies 32 bytes per
 iteration; the tail uses the scalar fallback. On host (x86, etc.) only the
 scalar fallback runs.
 
+### Non-temporal stores (write side)
+
+On aarch64 the write loop emits paired non-temporal stores (`stnp q, q`) via
+`nxmt_stnp_q`. This bypasses L1/L2 and streams writes directly to the memory
+system, so cache-friendly write-back doesn't cap the test at L2 throughput.
+The pattern values are still computed in NEON registers; only the store
+instruction changes. Misaligned 16-byte addresses are tolerated by Cortex-A57
+when SCTLR.A=0 (default for user mode), at a small per-access penalty.
+
+### Software prefetch (verify side)
+
+`ADDRESS` and `RANDOM` verify loops issue `__builtin_prefetch` 64 words
+(~512 bytes / 8 cache lines) ahead of the read cursor. Combined with NT
+stores on the matching write phase, this keeps DRAM read traffic flowing
+while NEON computes the expected value in parallel. `FIXED_*`, `CHECKER`,
+and `WALKING` rely on the hardware stride prefetcher only — their per-word
+compute is cheap enough that prefetch overhead is not worth the bookkeeping.
+
 ### Two-stage verify
 
 For phases where the expected value is cheap to compute SIMD-wide
