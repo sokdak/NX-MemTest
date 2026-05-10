@@ -16,6 +16,10 @@ Each phase performs a streaming write across the worker's slice of the arena,
 then a streaming verify. Extreme mode additionally runs `nxmt_extreme_cpu_pressure`
 on every word to keep cores busy between memory operations.
 
+For the full pattern spec, NEON/scalar paths, two-stage verify, error reporting,
+and reproduction contract, see
+[Memory Test Algorithm](docs/memory-test-algorithm.md).
+
 ## Progress Labels
 
 - **System Stress Pass** — reaches 100% when the configured arena finishes one full pass.
