@@ -43,65 +43,50 @@ void __libnx_initheap(void) {
             uint64_t prefix = (uint64_t)(aligned_start - raw_start);
             if (raw_size > prefix) {
                 uint64_t usable_size = (raw_size - prefix) & ~(uint64_t)(NXMT_PAGE_BYTES - 1u);
-                uint64_t reserve = nxmt_runtime_heap_reserve(usable_size);
-                reserve &= ~(uint64_t)(NXMT_PAGE_BYTES - 1u);
-                if (reserve != 0 && usable_size > reserve) {
-                    fake_heap_start = (char*)aligned_start;
-                    fake_heap_end = (char*)aligned_start + reserve;
-                    g_test_arena_addr = (void*)(aligned_start + reserve);
-                    g_test_arena_size = usable_size - reserve;
+                if (usable_size != 0) {
+                    uint64_t reserve = nxmt_runtime_heap_reserve(usable_size) & ~(uint64_t)(NXMT_PAGE_BYTES - 1u);
+                    if (reserve != 0 && usable_size > reserve) {
+                        fake_heap_start = (char*)aligned_start;
+                        fake_heap_end = (char*)aligned_start + reserve;
+                        g_test_arena_addr = (void*)(aligned_start + reserve);
+                        g_test_arena_size = usable_size - reserve;
+                    } else {
+                        fake_heap_start = (char*)aligned_start;
+                        fake_heap_end = (char*)aligned_start + usable_size;
+                    }
                     return;
                 }
             }
         }
+        diagAbortWithResult(MAKERESULT(Module_Libnx, LibnxError_HeapAllocFailed));
     }
 
     void *heap = NULL;
     uint64_t heap_size = 32ull * NXMT_MIB_BYTES;
-    if (R_SUCCEEDED(svcSetHeapSize(&heap, heap_size)) && heap != NULL) {
+    Result rc = svcSetHeapSize(&heap, heap_size);
+    if (R_SUCCEEDED(rc) && heap != NULL) {
         fake_heap_start = (char*)heap;
         fake_heap_end = (char*)heap + heap_size;
+        return;
     }
+    diagAbortWithResult(R_FAILED(rc) ? rc : MAKERESULT(Module_Libnx, LibnxError_HeapAllocFailed));
 }
 
 void nxmt_platform_get_memory(NxmtPlatformMemory *out) {
     memset(out, 0, sizeof(*out));
-    out->has_heap_override = envHasHeapOverride();
-    uint64_t raw_override_heap_size = 0;
-    if (out->has_heap_override) {
-        out->override_heap_addr = g_test_arena_addr != NULL ? g_test_arena_addr : envGetHeapOverrideAddr();
-        out->override_heap_size = g_test_arena_size != 0 ? g_test_arena_size : envGetHeapOverrideSize();
-        raw_override_heap_size = envGetHeapOverrideSize();
+    bool override_present = envHasHeapOverride();
+    bool arena_usable = override_present && g_test_arena_addr != NULL && g_test_arena_size != 0;
+    out->has_heap_override = arena_usable;
+    uint64_t raw_override_heap_size = override_present ? envGetHeapOverrideSize() : 0;
+    if (arena_usable) {
+        out->override_heap_addr = g_test_arena_addr;
+        out->override_heap_size = g_test_arena_size;
     }
 
-    uint64_t application_pool = 0;
-    uint64_t applet_pool = 0;
-    uint64_t system_pool = 0;
-    uint64_t unsafe_pool = 0;
-    Result rc_application = svcGetSystemInfo(&application_pool, SystemInfoType_TotalPhysicalMemorySize, INVALID_HANDLE, PhysicalMemorySystemInfo_Application);
-    Result rc_applet = svcGetSystemInfo(&applet_pool, SystemInfoType_TotalPhysicalMemorySize, INVALID_HANDLE, PhysicalMemorySystemInfo_Applet);
-    Result rc_system = svcGetSystemInfo(&system_pool, SystemInfoType_TotalPhysicalMemorySize, INVALID_HANDLE, PhysicalMemorySystemInfo_System);
-    Result rc_unsafe = svcGetSystemInfo(&unsafe_pool, SystemInfoType_TotalPhysicalMemorySize, INVALID_HANDLE, PhysicalMemorySystemInfo_SystemUnsafe);
-    if (R_SUCCEEDED(rc_application) && R_SUCCEEDED(rc_applet) && R_SUCCEEDED(rc_system) && R_SUCCEEDED(rc_unsafe)) {
-        uint64_t total = application_pool + applet_pool + system_pool + unsafe_pool;
-        out->physical_pools_total = total;
-        out->has_physical_pools_total = total != 0;
-    }
-
-    uint64_t process_total = 0;
-    Result rc_process = svcGetInfo(&process_total, InfoType_TotalMemorySize, CUR_PROCESS_HANDLE, 0);
-    if (R_SUCCEEDED(rc_process)) {
-        out->process_total_memory = process_total;
-        out->has_process_total_memory = process_total != 0;
-    }
-
-    NxmtMemorySelection selected = nxmt_select_system_memory_total(
-        out->has_physical_pools_total,
-        out->physical_pools_total,
-        out->has_process_total_memory,
-        out->process_total_memory,
-        out->has_heap_override,
-        raw_override_heap_size);
+    // HBL already communicates full-memory availability through OverrideHeap.
+    // Keep startup away from extra memory-info syscalls so loader compatibility
+    // problems do not abort before the UI can render.
+    NxmtMemorySelection selected = nxmt_select_launch_safe_memory_total(override_present, raw_override_heap_size);
     out->effective_total_memory = selected.total;
     out->effective_total_source = selected.source;
     out->extended_memory_detected = selected.extended_memory_detected;
@@ -137,6 +122,9 @@ void nxmt_platform_print(const char *fmt, ...) {
     va_start(args, fmt);
     vprintf(fmt, args);
     va_end(args);
+}
+
+void nxmt_platform_console_flush(void) {
     consoleUpdate(NULL);
 }
 
@@ -179,8 +167,11 @@ NxmtInput nxmt_platform_read_input(void) {
 
     NxmtInput input;
     input.a = (down & HidNpadButton_A) != 0;
+    input.b = (down & HidNpadButton_B) != 0;
     input.x = (down & HidNpadButton_X) != 0;
     input.y = (down & HidNpadButton_Y) != 0;
+    input.up = (down & (HidNpadButton_Up | HidNpadButton_StickLUp)) != 0;
+    input.down = (down & (HidNpadButton_Down | HidNpadButton_StickLDown)) != 0;
     input.plus = (down & HidNpadButton_Plus) != 0;
     return input;
 }

@@ -4,8 +4,11 @@
 
 typedef struct NxmtInput {
     bool a;
+    bool b;
     bool x;
     bool y;
+    bool up;
+    bool down;
     bool plus;
 } NxmtInput;
 
@@ -31,6 +34,7 @@ uint64_t nxmt_platform_ticks_ms(void);
 void nxmt_platform_console_init(void);
 void nxmt_platform_console_exit(void);
 void nxmt_platform_print(const char *fmt, ...);
+void nxmt_platform_console_flush(void);
 void nxmt_platform_debug_stage(const char *stage);
 NxmtInput nxmt_platform_read_input(void);
 bool nxmt_platform_should_quit(void);
