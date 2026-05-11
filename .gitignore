@@ -1,11 +1,13 @@
 .worktrees
 .worktrees/
 build/
+romfs/
 *.elf
 *.nro
 *.nacp
 *.map
 *.o
 *.d
+*.dksh
 .vs/
 .vscode/

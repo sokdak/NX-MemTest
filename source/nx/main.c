@@ -693,6 +693,7 @@ static void draw_results_section(
     bool thread_fallback,
     uint64_t elapsed_ms,
     uint64_t gpu_pumped_bytes,
+    uint64_t gpu_pump_error_batches,
     bool log_ok) {
     char buf[64];
     tui_section_top("Result");
@@ -738,6 +739,11 @@ static void draw_results_section(
                 (unsigned long long)(gpu_pumped_bytes / NXMT_MIB_BYTES));
         }
         tui_kv("GPU Pumped", ANSI_CYAN, "%s", buf);
+        snprintf(buf, sizeof(buf), "%llu",
+            (unsigned long long)gpu_pump_error_batches);
+        tui_kv("GPU Verify Errors",
+            gpu_pump_error_batches == 0 ? ANSI_GREEN : ANSI_RED,
+            "%s batches", buf);
     }
     if (elapsed_ms > 0) {
         uint64_t total_bytes = total_stats->bytes_written + total_stats->bytes_verified + gpu_pumped_bytes;
@@ -771,6 +777,11 @@ int main(int argc, char **argv) {
     nxmt_platform_debug_stage("main-entry");
     nxmt_platform_console_init();
     nxmt_platform_debug_stage("console-init");
+    /* romfs holds the compiled GPU verify shader (gpu_verify.dksh).
+     * Failure here is non-fatal; the GPU pump path will detect a missing
+     * shader and refuse to activate, falling back to CPU-only operation. */
+    romfsInit();
+    nxmt_platform_debug_stage("romfs-init");
 
     NxmtPlatformMemory memory;
     nxmt_platform_debug_stage("memory-query-start");
@@ -870,7 +881,9 @@ int main(int argc, char **argv) {
     bool gpu_pump_active = false;
     uint64_t gpu_pump_region = 0;
     atomic_uint_fast64_t gpu_pump_bytes;
+    atomic_uint_fast64_t gpu_pump_err_batches;
     atomic_init(&gpu_pump_bytes, 0u);
+    atomic_init(&gpu_pump_err_batches, 0u);
     if ((mode == NXMT_MODE_MEMORY_LOAD || mode == NXMT_MODE_EXTREME)
         && arena.size >= 1024ull * NXMT_MIB_BYTES && workers >= 2u) {
         gpu_pump_region = 256ull * NXMT_MIB_BYTES;
@@ -882,7 +895,8 @@ int main(int argc, char **argv) {
         gpu_pump_active = nxmt_gpu_pump_start(
             gpu_storage, gpu_pump_region,
             64ull * NXMT_MIB_BYTES, pump_core,
-            &g_stop_requested, &gpu_pump_bytes);
+            seed,
+            &g_stop_requested, &gpu_pump_bytes, &gpu_pump_err_batches);
         if (gpu_pump_active) {
             workers -= 1u;
         } else {
@@ -1166,6 +1180,15 @@ int main(int argc, char **argv) {
         nxmt_gpu_pump_stop();
     }
     uint64_t gpu_pumped = atomic_load(&gpu_pump_bytes);
+    uint64_t gpu_err_batches = atomic_load(&gpu_pump_err_batches);
+    if (gpu_err_batches > 0u) {
+        /* GPU verify spotted mismatched bytes - escalate so the result
+         * label reflects that the test caught something even if the CPU
+         * side ran clean. */
+        if (status != NXMT_STATUS_FAIL) {
+            status = NXMT_STATUS_FAIL;
+        }
+    }
 
     /* The runner reports ABORTED whenever stop_requested triggered mid-pass,
      * but if we ended naturally on the duration timer (not a user / system
@@ -1203,7 +1226,7 @@ int main(int argc, char **argv) {
     draw_run_config_section(mode, workers, seed, duration_seconds);
     nxmt_platform_print("\n");
     draw_results_section(mode, workers, completed_workers, passes_completed, &arena, &total_stats, &report, status,
-        thread_fallback, elapsed, gpu_pumped, log_ok);
+        thread_fallback, elapsed, gpu_pumped, gpu_err_batches, log_ok);
     nxmt_platform_print("\n");
     draw_footer_hint("[B] Back to menu    [PLUS] Exit");
     nxmt_platform_console_flush();
@@ -1226,5 +1249,6 @@ int main(int argc, char **argv) {
 
     tui_show_cursor();
     nxmt_platform_console_exit();
+    romfsExit();
     return 0;
 }
