@@ -33,14 +33,16 @@ multiplications and shifts that don't have cheap NEON equivalents.
 
 ## Phases
 
-| Phase         | Expected word                                            | Targets                                                                  |
-| ------------- | -------------------------------------------------------- | ------------------------------------------------------------------------ |
-| `FIXED_A`     | `0xAAAA...AAAA`                                          | Stuck-at-0 cells; per-bit DC stress.                                     |
-| `FIXED_5`     | `0x5555...5555`                                          | Stuck-at-1 cells; complement of FIXED_A.                                 |
-| `CHECKER`     | `(word_index & 1) ? 0x55..55 : 0xAA..AA`                 | Inter-word coupling; bus toggling between adjacent words.                |
-| `ADDRESS`     | `offset ^ seed ^ (pass * 0x100000001b3)`                 | Address-line faults: each word's expected value depends on its position. |
+| Phase         | Expected word                                              | Targets                                                                  |
+| ------------- | ---------------------------------------------------------- | ------------------------------------------------------------------------ |
+| `FIXED_A`     | `0xAAAA...AAAA`                                            | Stuck-at-0 cells; per-bit DC stress.                                     |
+| `FIXED_5`     | `0x5555...5555`                                            | Stuck-at-1 cells; complement of FIXED_A.                                 |
+| `CHECKER`     | `(word_index & 1) ? 0x55..55 : 0xAA..AA`                   | Inter-word coupling; bus toggling between adjacent words.                |
+| `ADDRESS`     | `offset ^ seed ^ (pass * 0x100000001b3)`                   | Address-line faults: each word's expected value depends on its position. |
 | `RANDOM`      | `bswap64(word_index) ^ seed ^ (pass * 0x9e3779b97f4a7c15)` | Pseudo-random byte pattern derived from index; high entropy per word.    |
-| `WALKING`     | `1ULL << ((word_index + pass) & 63)`                     | Single-bit walking pattern; one bit set per word, position cycles per pass. |
+| `WALKING`     | `1ULL << ((word_index + pass) & 63)`                       | Single-bit walking pattern; one bit set per word, position cycles per pass. |
+| `NARROW`      | `(X * 0x0101..01) ^ 0x0706050403020100 ^ seed`, `X = ((offset + pass*8) & 0xff)` | Narrow-store correctness. Written via 8-bit `STRB` instructions through a `volatile uint8_t*`; verifies the per-byte store path doesn't corrupt neighbours. |
+| `BITSPREAD`   | `((word_index + pass) & 1) ? 0xb6db..6db : 0x4924..924`    | Long-range bit coupling. Set bits are spaced every 3 positions, stressing cells whose neighbours are far apart in the bit layout. |
 
 Constants:
 
@@ -57,12 +59,12 @@ Defined in `source/core/runner.c`:
 
 - **Quick Check** (`NXMT_MODE_QUICK`): `FIXED_A`, `ADDRESS`, `RANDOM`.
 - **Memory Load** (`NXMT_MODE_MEMORY_LOAD`): `FIXED_A`, `FIXED_5`, `CHECKER`,
-  `ADDRESS`, `RANDOM`, `WALKING`.
+  `BITSPREAD`, `ADDRESS`, `RANDOM`, `NARROW`, `WALKING`.
 - **Extreme** (`NXMT_MODE_EXTREME`): same as Memory Load, plus
   `nxmt_extreme_cpu_pressure` is folded over every word during both write and
   verify (see "Extreme CPU pressure").
 
-`nxmt_runner_phase_count(mode)` returns 3 or 6 accordingly. The TUI uses this
+`nxmt_runner_phase_count(mode)` returns 3 or 8 accordingly. The TUI uses this
 to size the progress bar before launching workers.
 
 ## Pass Structure

@@ -29,6 +29,22 @@ uint64_t nxmt_expected_value(uint64_t seed, NxmtPhase phase, uint64_t pass, uint
         unsigned bit = (unsigned)((word_index + pass) & 63u);
         return 1ull << bit;
     }
+    case NXMT_PHASE_NARROW: {
+        /* Per-byte deterministic value, written via 8-bit narrow stores at
+         * runtime. The closed form below composes 8 byte values into one
+         * 64-bit word: byte i (0..7) = ((offset + pass*8) & 0xff) ^ i ^ seed_byte_i.
+         * Both terms inside the byte are <= 255 since the low 3 bits of
+         * (offset + pass*8) are zero (8-aligned), so + and ^ coincide. */
+        uint64_t X = (offset + pass * 8u) & 0xffu;
+        return (X * 0x0101010101010101ull) ^ 0x0706050403020100ull ^ seed;
+    }
+    case NXMT_PHASE_BITSPREAD: {
+        /* Sparse-bit coupling pattern. Each word has bits set every 3 positions
+         * (0x49.. or its complement 0xb6..) so toggling distant bits within a
+         * word stresses long-range cell coupling that dense patterns miss. */
+        return ((word_index + pass) & 1u) ? 0xb6db6db6db6db6dbull
+                                          : 0x4924924924924924ull;
+    }
     }
 
     return seed ^ offset ^ pass;

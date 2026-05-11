@@ -24,5 +24,25 @@ int main(void) {
     failed |= expect_u64(nxmt_expected_value(seed, NXMT_PHASE_CHECKER, 0, 0), 0xaaaaaaaaaaaaaaaaull);
     failed |= expect_u64(nxmt_expected_value(seed, NXMT_PHASE_CHECKER, 0, 8), 0x5555555555555555ull);
 
+    /* NARROW at offset 0 / pass 0: X = 0, so expected = 0x0706050403020100 ^ seed. */
+    failed |= expect_u64(nxmt_expected_value(seed, NXMT_PHASE_NARROW, 0, 0),
+                         0x1532537c99bedff0ull);
+    /* Same inputs must return the same byte-composed value. */
+    uint64_t narrow_a = nxmt_expected_value(seed, NXMT_PHASE_NARROW, 0, 0);
+    uint64_t narrow_b = nxmt_expected_value(seed, NXMT_PHASE_NARROW, 0, 0);
+    failed |= narrow_a == narrow_b ? 0 : 1;
+    /* Different offset must shift X and therefore the composed word. */
+    failed |= nxmt_expected_value(seed, NXMT_PHASE_NARROW, 0, 0)
+              != nxmt_expected_value(seed, NXMT_PHASE_NARROW, 0, 8)
+              ? 0 : 1;
+
+    /* BITSPREAD alternates two sparse-bit values per (word_index + pass) parity. */
+    failed |= expect_u64(nxmt_expected_value(seed, NXMT_PHASE_BITSPREAD, 0, 0),
+                         0x4924924924924924ull);
+    failed |= expect_u64(nxmt_expected_value(seed, NXMT_PHASE_BITSPREAD, 0, 8),
+                         0xb6db6db6db6db6dbull);
+    failed |= expect_u64(nxmt_expected_value(seed, NXMT_PHASE_BITSPREAD, 1, 0),
+                         0xb6db6db6db6db6dbull);
+
     return failed;
 }

@@ -42,10 +42,15 @@ static const NxmtPhase memory_load_phases[] = {
     NXMT_PHASE_FIXED_A,
     NXMT_PHASE_FIXED_5,
     NXMT_PHASE_CHECKER,
+    NXMT_PHASE_BITSPREAD,
     NXMT_PHASE_ADDRESS,
     NXMT_PHASE_RANDOM,
+    NXMT_PHASE_NARROW,
     NXMT_PHASE_WALKING
 };
+
+static const uint64_t kBitSpread0 = 0x4924924924924924ull;
+static const uint64_t kBitSpread1 = 0xb6db6db6db6db6dbull;
 
 static uint64_t nxmt_extreme_cpu_pressure(uint64_t state, uint64_t value) {
     for (uint32_t i = 0; i < 64u; ++i) {
@@ -215,6 +220,40 @@ static void nxmt_write_chunk(
         }
         break;
     }
+    case NXMT_PHASE_NARROW: {
+        /* Force 8-bit stores: write bytes via a volatile uint8_t* so the
+         * compiler emits STRB and never coalesces neighbours into wider
+         * stores. This exercises the CPU's narrow-write path, which has
+         * different store-buffer behaviour than 64-bit stores. */
+        volatile uint8_t *bp = (volatile uint8_t*)p;
+        const uint64_t byte_count = chunk_words * (uint64_t)NXMT_WORD_BYTES;
+        const uint64_t byte_base = start_word * (uint64_t)NXMT_WORD_BYTES
+                                   + pass * (uint64_t)NXMT_WORD_BYTES;
+        for (uint64_t i = 0; i < byte_count; ++i) {
+            uint8_t seed_byte = (uint8_t)(seed >> ((i & 7u) * 8u));
+            bp[i] = (uint8_t)(byte_base + i) ^ seed_byte;
+        }
+        break;
+    }
+    case NXMT_PHASE_BITSPREAD: {
+        const uint64_t a_first = ((start_word + pass) & 1u) ? kBitSpread1 : kBitSpread0;
+        const uint64_t b_first = a_first ^ (kBitSpread0 ^ kBitSpread1);
+        uint64_t k = 0;
+#if NXMT_HAS_NEON
+        const uint64x2_t pat = vsetq_lane_u64(b_first, vdupq_n_u64(a_first), 1);
+        for (; k + 4 <= chunk_words; k += 4) {
+            nxmt_stnp_q(p + k, pat, pat);
+        }
+#endif
+        for (; k + 2 <= chunk_words; k += 2) {
+            p[k]     = a_first;
+            p[k + 1] = b_first;
+        }
+        if (k < chunk_words) {
+            p[k] = a_first;
+        }
+        break;
+    }
     }
 }
 
@@ -361,6 +400,54 @@ static void nxmt_verify_chunk(
         const uint64_t pos_base = start_word + pass;
         for (uint64_t k = 0; k < chunk_words; ++k) {
             uint64_t expected = 1ull << ((pos_base + k) & 63u);
+            uint64_t actual = p[k];
+            if (actual != expected) {
+                nxmt_report_record_error(report, config->mode, phase, seed, pass, config->worker_id,
+                    base_off + k * (uint64_t)NXMT_WORD_BYTES, expected, actual);
+            }
+        }
+        break;
+    }
+    case NXMT_PHASE_NARROW: {
+        /* X cycles through 0, 8, 16, ..., 248 every 32 words. The expected
+         * word is X * 0x0101..01 ^ 0x0706..0100 ^ seed; see patterns.c
+         * NXMT_PHASE_NARROW for derivation. Scalar loop is fine here — the
+         * write path uses byte stores anyway, so verify isn't the bottleneck. */
+        uint64_t acc = 0;
+        const uint64_t pass_off = pass * (uint64_t)NXMT_WORD_BYTES;
+        for (uint64_t k = 0; k < chunk_words; ++k) {
+            uint64_t X = (base_off + k * (uint64_t)NXMT_WORD_BYTES + pass_off) & 0xffu;
+            uint64_t expected = (X * 0x0101010101010101ull)
+                              ^ 0x0706050403020100ull ^ seed;
+            acc |= (p[k] ^ expected);
+        }
+        if (acc == 0) break;
+        for (uint64_t k = 0; k < chunk_words; ++k) {
+            uint64_t X = (base_off + k * (uint64_t)NXMT_WORD_BYTES + pass_off) & 0xffu;
+            uint64_t expected = (X * 0x0101010101010101ull)
+                              ^ 0x0706050403020100ull ^ seed;
+            uint64_t actual = p[k];
+            if (actual != expected) {
+                nxmt_report_record_error(report, config->mode, phase, seed, pass, config->worker_id,
+                    base_off + k * (uint64_t)NXMT_WORD_BYTES, expected, actual);
+            }
+        }
+        break;
+    }
+    case NXMT_PHASE_BITSPREAD: {
+        const uint64_t a_first = ((start_word + pass) & 1u) ? kBitSpread1 : kBitSpread0;
+        const uint64_t b_first = a_first ^ (kBitSpread0 ^ kBitSpread1);
+        uint64_t acc = 0;
+        for (uint64_t k = 0; k + 2 <= chunk_words; k += 2) {
+            acc |= (p[k] ^ a_first);
+            acc |= (p[k + 1] ^ b_first);
+        }
+        if (chunk_words & 1u) {
+            acc |= (p[chunk_words - 1] ^ a_first);
+        }
+        if (acc == 0) break;
+        for (uint64_t k = 0; k < chunk_words; ++k) {
+            uint64_t expected = ((start_word + k + pass) & 1u) ? kBitSpread1 : kBitSpread0;
             uint64_t actual = p[k];
             if (actual != expected) {
                 nxmt_report_record_error(report, config->mode, phase, seed, pass, config->worker_id,
