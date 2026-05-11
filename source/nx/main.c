@@ -491,10 +491,12 @@ static void run_gpu_bench_screen(const NxmtArena *arena, const NxmtPlatformMemor
     nxmt_platform_print("\n");
     nxmt_platform_console_flush();
 
-    /* 32 MiB per buffer x 64 iterations = ~2 GiB of copy traffic.
-     * Small enough to fit inside the kernel-managed system heap that
-     * deko3d allocates from without touching the OverrideHeap arena. */
-    nxmt_gpu_bench_run(32ull * NXMT_MIB_BYTES, 64u);
+    /* Start conservative: 4 MiB per buffer x 32 iterations = 128 MiB of
+     * copy traffic. Most of physical RAM is locked up in the OverrideHeap
+     * arena, so deko3d's kernel-side allocations have to fit in whatever
+     * the kernel keeps in reserve. Tune up once we confirm the path
+     * survives end-to-end. */
+    nxmt_gpu_bench_run(4ull * NXMT_MIB_BYTES, 32u);
 
     nxmt_platform_print("\n");
     draw_footer_hint("[B] / [PLUS] back to menu");

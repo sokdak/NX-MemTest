@@ -1,5 +1,6 @@
 #include "gpu_bench.h"
 
+#include <stdio.h>
 #include <string.h>
 #include <switch.h>
 #include <deko3d.h>
@@ -12,16 +13,40 @@
  * generous. */
 #define NXMT_GPU_CMD_MEM_BYTES (64u * 1024u)
 
+/* deko3d default error handling is to fatalThrow on any internal failure,
+ * which kills the process. Install a callback that surfaces the error via
+ * the boot_stage marker and console and let the run abort gracefully. */
+static volatile int g_gpu_error_seen = 0;
+
+static void nxmt_gpu_debug_cb(void* userData, const char* context,
+                              DkResult result, const char* message) {
+    (void)userData;
+    g_gpu_error_seen = 1;
+    char stage[128];
+    snprintf(stage, sizeof(stage), "gpu-err:%s:%d:%s",
+        context ? context : "?", (int)result, message ? message : "");
+    nxmt_platform_debug_stage(stage);
+    nxmt_platform_print("GPU bench: %s in %s (result=%d)\n",
+        message ? message : "<no message>", context ? context : "?", (int)result);
+    nxmt_platform_console_flush();
+}
+
 bool nxmt_gpu_bench_run(uint64_t buffer_size, uint32_t iterations) {
     if (buffer_size == 0u || iterations == 0u) {
         return false;
     }
 
+    g_gpu_error_seen = 0;
+    nxmt_platform_debug_stage("gpu-bench-enter");
+
     DkDeviceMaker dev_maker;
     dkDeviceMakerDefaults(&dev_maker);
+    dev_maker.cbDebug = nxmt_gpu_debug_cb;
+    nxmt_platform_debug_stage("gpu-device-create");
     DkDevice device = dkDeviceCreate(&dev_maker);
-    if (device == NULL) {
+    if (device == NULL || g_gpu_error_seen) {
         nxmt_platform_print("GPU bench: dkDeviceCreate failed\n");
+        if (device) dkDeviceDestroy(device);
         return false;
     }
 
@@ -29,10 +54,12 @@ bool nxmt_gpu_bench_run(uint64_t buffer_size, uint32_t iterations) {
     DkMemBlockMaker cmd_mem_maker;
     dkMemBlockMakerDefaults(&cmd_mem_maker, device, NXMT_GPU_CMD_MEM_BYTES);
     cmd_mem_maker.flags = DkMemBlockFlags_CpuUncached | DkMemBlockFlags_GpuCached;
+    nxmt_platform_debug_stage("gpu-cmd-mem");
     DkMemBlock cmd_mem = dkMemBlockCreate(&cmd_mem_maker);
 
     DkCmdBufMaker cmd_maker;
     dkCmdBufMakerDefaults(&cmd_maker, device);
+    nxmt_platform_debug_stage("gpu-cmdbuf");
     DkCmdBuf cmdbuf = dkCmdBufCreate(&cmd_maker);
 
     /* Source and destination buffers. CpuCached on the host side so the
@@ -40,10 +67,12 @@ bool nxmt_gpu_bench_run(uint64_t buffer_size, uint32_t iterations) {
     DkMemBlockMaker buf_maker;
     dkMemBlockMakerDefaults(&buf_maker, device, (uint32_t)buffer_size);
     buf_maker.flags = DkMemBlockFlags_CpuCached | DkMemBlockFlags_GpuCached;
+    nxmt_platform_debug_stage("gpu-src-mem");
     DkMemBlock src = dkMemBlockCreate(&buf_maker);
+    nxmt_platform_debug_stage("gpu-dst-mem");
     DkMemBlock dst = dkMemBlockCreate(&buf_maker);
 
-    if (cmd_mem == NULL || cmdbuf == NULL || src == NULL || dst == NULL) {
+    if (cmd_mem == NULL || cmdbuf == NULL || src == NULL || dst == NULL || g_gpu_error_seen) {
         nxmt_platform_print("GPU bench: memblock alloc failed (size=%llu MiB)\n",
             (unsigned long long)(buffer_size / NXMT_MIB_BYTES));
         if (dst) dkMemBlockDestroy(dst);
@@ -79,8 +108,9 @@ bool nxmt_gpu_bench_run(uint64_t buffer_size, uint32_t iterations) {
 
     DkQueueMaker q_maker;
     dkQueueMakerDefaults(&q_maker, device);
+    nxmt_platform_debug_stage("gpu-queue");
     DkQueue queue = dkQueueCreate(&q_maker);
-    if (queue == NULL) {
+    if (queue == NULL || g_gpu_error_seen) {
         nxmt_platform_print("GPU bench: dkQueueCreate failed\n");
         dkMemBlockDestroy(dst);
         dkMemBlockDestroy(src);
@@ -90,12 +120,15 @@ bool nxmt_gpu_bench_run(uint64_t buffer_size, uint32_t iterations) {
         return false;
     }
 
+    nxmt_platform_debug_stage("gpu-submit-loop");
     uint64_t start_ms = nxmt_platform_ticks_ms();
     for (uint32_t i = 0; i < iterations; ++i) {
         dkQueueSubmitCommands(queue, list);
     }
+    nxmt_platform_debug_stage("gpu-wait-idle");
     dkQueueWaitIdle(queue);
     uint64_t elapsed_ms = nxmt_platform_ticks_ms() - start_ms;
+    nxmt_platform_debug_stage("gpu-done");
 
     bool verify_ok = false;
     if (src_cpu != NULL && dst_cpu != NULL) {
