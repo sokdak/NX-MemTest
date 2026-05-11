@@ -267,6 +267,7 @@ static void draw_header(void) {
     char eq_buf[TUI_WIDTH];
     fill_chars(eq_buf, sizeof(eq_buf), '=', TUI_WIDTH - 2);
     nxmt_platform_print(ANSI_CYAN "+%s+" ANSI_RESET "\n", eq_buf);
+    tui_section_blank();
 
     const char *title_left = "NX-MemTest 0.1.0";
     const char *title_right = "[PLUS] Exit";
@@ -277,6 +278,7 @@ static void draw_header(void) {
     fill_chars(pad_buf, sizeof(pad_buf), ' ', padding);
     nxmt_platform_print(ANSI_CYAN "|" ANSI_RESET " " ANSI_BOLD ANSI_WHITE "%s" ANSI_RESET "%s" ANSI_DIM "%s" ANSI_RESET " " ANSI_CYAN "|" ANSI_RESET "\n",
         title_left, pad_buf, title_right);
+    tui_section_blank();
     nxmt_platform_print(ANSI_CYAN "+%s+" ANSI_RESET "\n", eq_buf);
 }
 
@@ -624,19 +626,27 @@ typedef struct ProgressLayout {
 } ProgressLayout;
 
 static void draw_progress_frame(ProgressLayout *layout, uint32_t row_start) {
-    layout->row_top = row_start;
-    layout->row_line = row_start + 1u;
-    layout->row_bar = row_start + 2u;
-    layout->row_info = row_start + 3u;
-    layout->row_bottom = row_start + 4u;
+    /* Layout with inner top/bottom blank padding around the three content
+     * rows (line, bar, info), matching the other section boxes. */
+    layout->row_top    = row_start;
+    /* row_start + 1: top padding blank */
+    layout->row_line   = row_start + 2u;
+    layout->row_bar    = row_start + 3u;
+    layout->row_info   = row_start + 4u;
+    /* row_start + 5: bottom padding blank */
+    layout->row_bottom = row_start + 6u;
 
     tui_goto(layout->row_top, 1u);
     tui_section_top("Progress");
+    tui_goto(row_start + 1u, 1u);
+    tui_section_blank();
     tui_goto(layout->row_line, 1u);
     tui_section_blank();
     tui_goto(layout->row_bar, 1u);
     tui_section_blank();
     tui_goto(layout->row_info, 1u);
+    tui_section_blank();
+    tui_goto(row_start + 5u, 1u);
     tui_section_blank();
     tui_goto(layout->row_bottom, 1u);
     tui_section_bottom();
@@ -877,10 +887,10 @@ int main(int argc, char **argv) {
     draw_run_config_section(mode, workers, seed, duration_seconds);
     nxmt_platform_print("\n");
 
-    /* Header (3) + blank + memory (9 with inner padding) + blank + config
-     * (8 with inner padding) + blank = 23 rows of preamble, so the progress
-     * frame starts at row 25. */
-    const uint32_t progress_row_start = 25u;
+    /* Header (5 with inner padding) + blank + memory (9 with inner padding)
+     * + blank + config (8 with inner padding) + blank = 25 rows of preamble,
+     * so the progress frame top border lands on row 27. */
+    const uint32_t progress_row_start = 27u;
     ProgressLayout progress_layout;
     draw_progress_frame(&progress_layout, progress_row_start);
     tui_goto(progress_layout.row_bottom + 2u, 1u);
