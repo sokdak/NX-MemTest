@@ -218,6 +218,7 @@ static void format_progress_bar(char *buf, size_t buf_size, uint64_t milli) {
 static void draw_memory_section(const NxmtArena *arena, const NxmtPlatformMemory *memory) {
     char buf[64];
     tui_section_top("Memory");
+    tui_section_blank();
     format_size_mib(buf, sizeof(buf), arena->size);
     tui_kv("Test Arena", ANSI_YELLOW, "%s", buf);
     if (memory->has_effective_total) {
@@ -234,12 +235,14 @@ static void draw_memory_section(const NxmtArena *arena, const NxmtPlatformMemory
         tui_kv("Extended Memory", ANSI_DIM, "no");
         tui_kv("Physical Coverage", ANSI_DIM, "unavailable");
     }
+    tui_section_blank();
     tui_section_bottom();
 }
 
 static void draw_run_config_section(NxmtMode mode, uint32_t workers, uint64_t seed, uint64_t duration_seconds) {
     char buf[64];
     tui_section_top("Configuration");
+    tui_section_blank();
     tui_kv("Mode", ANSI_YELLOW, "%s", mode_name(mode));
     snprintf(buf, sizeof(buf), "%u", workers);
     tui_kv("Workers", ANSI_YELLOW, "%s", buf);
@@ -255,6 +258,7 @@ static void draw_run_config_section(NxmtMode mode, uint32_t workers, uint64_t se
     } else {
         tui_kv("Duration", ANSI_DIM, "single pass");
     }
+    tui_section_blank();
     tui_section_bottom();
 }
 
@@ -441,6 +445,7 @@ static int tui_choose_duration(NxmtMode mode, uint64_t *out_seconds) {
             char title[64];
             snprintf(title, sizeof(title), "Test Duration  (%s)", mode_name(mode));
             tui_section_top(title);
+            tui_section_blank();
             for (size_t i = 0; i < NXMT_DURATION_COUNT; ++i) {
                 if ((int)i == sel) {
                     tui_text_line(ANSI_GREEN ">" ANSI_RESET, " " ANSI_BOLD "%s" ANSI_RESET, kDurations[i].label);
@@ -448,6 +453,7 @@ static int tui_choose_duration(NxmtMode mode, uint64_t *out_seconds) {
                     tui_text_line(ANSI_DIM " " ANSI_RESET, " %s", kDurations[i].label);
                 }
             }
+            tui_section_blank();
             tui_section_bottom();
             nxmt_platform_print("\n");
             draw_footer_hint("[Up/Down] move    [A] start    [B] back    [+] exit");
@@ -468,6 +474,7 @@ static int tui_choose_duration(NxmtMode mode, uint64_t *out_seconds) {
 static void tui_draw_mode_menu(uint64_t arena_size, bool has_memory_load, bool has_extreme) {
     (void)arena_size;
     tui_section_top("Select Mode");
+    tui_section_blank();
     tui_text_line(ANSI_GREEN "[A]" ANSI_RESET, "%s",  " Quick Check");
     tui_text_line(has_memory_load ? ANSI_GREEN "[X]" ANSI_RESET : ANSI_DIM "[X]" ANSI_RESET,
         " Memory Load%s", has_memory_load ? "" : "  (requires 256 MiB)");
@@ -475,6 +482,7 @@ static void tui_draw_mode_menu(uint64_t arena_size, bool has_memory_load, bool h
         " Extreme%s", has_extreme ? "" : "  (requires 512 MiB)");
     tui_text_line(ANSI_CYAN "[B]" ANSI_RESET, "%s", " GPU Bandwidth PoC");
     tui_text_line(ANSI_RED "[+]" ANSI_RESET, "%s", " Exit");
+    tui_section_blank();
     tui_section_bottom();
     nxmt_platform_print("\n");
     draw_footer_hint("Press a button to choose a mode.");
@@ -486,8 +494,10 @@ static void run_gpu_bench_screen(const NxmtArena *arena, const NxmtPlatformMemor
     draw_header();
     nxmt_platform_print("\n");
     tui_section_top("GPU Bandwidth PoC");
+    tui_section_blank();
     tui_text_line(ANSI_DIM, "%s",
         "Stepping deko3d buffer size up until the kernel runs out of headroom.");
+    tui_section_blank();
     tui_section_bottom();
     nxmt_platform_print("\n");
     nxmt_platform_console_flush();
@@ -673,6 +683,7 @@ static void draw_results_section(
     bool log_ok) {
     char buf[64];
     tui_section_top("Result");
+    tui_section_blank();
     tui_kv("Status", status_color(status), "%s", status_name(status));
     format_percent(buf, sizeof(buf), nxmt_percent_milli(completed_workers, workers));
     tui_kv("System Stress Pass", ANSI_WHITE, "%s", buf);
@@ -724,6 +735,7 @@ static void draw_results_section(
     }
     tui_kv("Log", log_ok ? ANSI_DIM : ANSI_RED, "%s", log_ok ? NXMT_LOG_PATH : "unavailable");
     (void)mode;
+    tui_section_blank();
     tui_section_bottom();
 }
 
@@ -748,12 +760,16 @@ int main(int argc, char **argv) {
 
     if (!memory.has_heap_override) {
         tui_section_top("Memory");
+        tui_section_blank();
         tui_kv("Override Heap", ANSI_RED, "missing");
+        tui_section_blank();
         tui_section_bottom();
         nxmt_platform_print("\n");
         tui_section_top("Notice");
+        tui_section_blank();
         tui_text_line(ANSI_RED, "%s", "No usable OverrideHeap was provided.");
         tui_text_line("", "%s", "Launch through hbmenu in title-override / full-memory mode.");
+        tui_section_blank();
         tui_section_bottom();
         nxmt_platform_print("\n");
         draw_footer_hint("[PLUS] Exit");
@@ -819,7 +835,10 @@ int main(int argc, char **argv) {
     draw_run_config_section(mode, workers, seed, duration_seconds);
     nxmt_platform_print("\n");
 
-    const uint32_t progress_row_start = 21u;
+    /* Header (3) + blank + memory (9 with inner padding) + blank + config
+     * (8 with inner padding) + blank = 23 rows of preamble, so the progress
+     * frame starts at row 25. */
+    const uint32_t progress_row_start = 25u;
     ProgressLayout progress_layout;
     draw_progress_frame(&progress_layout, progress_row_start);
     tui_goto(progress_layout.row_bottom + 2u, 1u);
