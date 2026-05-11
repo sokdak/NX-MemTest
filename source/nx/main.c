@@ -892,14 +892,16 @@ int main(int argc, char **argv) {
         }
     }
 
-    /* Extreme is the "max system stress" mode - the GPU pump on its
-     * dedicated core spends most of its CPU time blocked on dkQueueWaitIdle,
-     * which leaves that core hot but lightly used. Layer a 50% duty-cycle
-     * pure-ALU filler on the same core so that core also contributes
-     * thermal / power load alongside the pump. Memory Load skips this so
-     * its bandwidth result stays uncontaminated. */
+    /* The GPU pump on its dedicated core spends most of its CPU time
+     * blocked on dkQueueWaitIdle - the core sits at ~5-10% utilisation
+     * even though every other core is hammering memory. Layer a 50%
+     * duty-cycle pure-ALU filler on the same core in both Memory Load
+     * and Extreme so the core also contributes useful CPU work. The
+     * filler is ALU-only, so it doesn't compete with the memory workers
+     * or the pump for DRAM bandwidth and bandwidth numbers stay clean. */
     bool cpu_filler_active = false;
-    if (mode == NXMT_MODE_EXTREME && gpu_pump_active) {
+    if ((mode == NXMT_MODE_MEMORY_LOAD || mode == NXMT_MODE_EXTREME)
+        && gpu_pump_active) {
         int pump_core = worker_cpu_map[workers]; /* the just-stolen core */
         cpu_filler_active = nxmt_cpu_filler_start(pump_core, &g_stop_requested);
     }
