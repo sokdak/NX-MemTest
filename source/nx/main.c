@@ -811,28 +811,32 @@ int main(int argc, char **argv) {
     draw_memory_section(&arena, &memory);
     nxmt_platform_print("\n");
 
+    bool exit_app = false;
+    while (!exit_app) {
     NxmtMode mode = NXMT_MODE_QUICK;
     uint64_t duration_seconds = 0;
+    bool user_aborted = false;
+    bool mode_selected = false;
     while (true) {
         nxmt_platform_debug_stage("mode-select-start");
         if (!tui_choose_mode(&arena, &memory, &mode)) {
-            tui_show_cursor();
-            nxmt_platform_console_exit();
-            return 0;
+            exit_app = true;
+            break;
         }
         nxmt_platform_debug_stage("mode-selected");
 
         if (mode == NXMT_MODE_QUICK) {
             duration_seconds = 0;
+            mode_selected = true;
             break;
         }
         int dr = tui_choose_duration(mode, &duration_seconds);
         if (dr == 0) {
-            tui_show_cursor();
-            nxmt_platform_console_exit();
-            return 0;
+            exit_app = true;
+            break;
         }
         if (dr == 1) {
+            mode_selected = true;
             break;
         }
         tui_clear();
@@ -841,6 +845,7 @@ int main(int argc, char **argv) {
         draw_memory_section(&arena, &memory);
         nxmt_platform_print("\n");
     }
+    if (exit_app || !mode_selected) break;
     const uint64_t duration_ms = duration_seconds * 1000ull;
 
     uint64_t seed = nxmt_platform_seed64();
@@ -1012,10 +1017,12 @@ int main(int argc, char **argv) {
         while (atomic_load_explicit(&g_finished_workers, memory_order_acquire) < started_threads) {
             if (!appletMainLoop()) {
                 atomic_store_explicit(&g_stop_requested, true, memory_order_relaxed);
+                user_aborted = true;
                 break;
             }
             if (nxmt_platform_read_input().plus) {
                 atomic_store_explicit(&g_stop_requested, true, memory_order_relaxed);
+                user_aborted = true;
                 break;
             }
             if (duration_ms > 0) {
@@ -1135,6 +1142,14 @@ int main(int argc, char **argv) {
     }
     uint64_t gpu_pumped = atomic_load(&gpu_pump_bytes);
 
+    /* The runner reports ABORTED whenever stop_requested triggered mid-pass,
+     * but if we ended naturally on the duration timer (not a user / system
+     * abort) and saw no mismatches, the run actually completed - promote to
+     * PASS so the result screen says so instead of "ABORTED". */
+    if (!user_aborted && status == NXMT_STATUS_ABORTED && report.error_count == 0) {
+        status = NXMT_STATUS_PASS;
+    }
+
     uint64_t elapsed = nxmt_platform_ticks_ms() - test_started;
 
     char report_text[2048];
@@ -1165,14 +1180,26 @@ int main(int argc, char **argv) {
     draw_results_section(mode, workers, completed_workers, passes_completed, &arena, &total_stats, &report, status,
         thread_fallback, elapsed, gpu_pumped, log_ok);
     nxmt_platform_print("\n");
-    draw_footer_hint("[PLUS] Exit");
+    draw_footer_hint("[B] Back to menu    [PLUS] Exit");
     nxmt_platform_console_flush();
 
-    while (appletMainLoop() && !nxmt_platform_read_input().plus) {
+    while (appletMainLoop()) {
+        NxmtInput in = nxmt_platform_read_input();
+        if (in.plus) { exit_app = true; break; }
+        if (in.b)    { break; }
         svcSleepThread(33000000ll);
+    }
+    if (exit_app) break;
+
+    /* Redraw the persistent preamble before looping back to the mode menu. */
+    tui_clear();
+    draw_header();
+    nxmt_platform_print("\n");
+    draw_memory_section(&arena, &memory);
+    nxmt_platform_print("\n");
     }
 
     tui_show_cursor();
     nxmt_platform_console_exit();
-    return status == NXMT_STATUS_PASS ? 0 : 1;
+    return 0;
 }
