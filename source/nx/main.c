@@ -375,7 +375,10 @@ static void format_report(
     NxmtStatus status,
     bool thread_fallback,
     bool stop_requested,
-    uint64_t elapsed_ms) {
+    uint64_t elapsed_ms,
+    uint64_t gpu_pumped_bytes,
+    uint64_t gpu_pump_error_batches,
+    uint64_t gpu_pump_verified_batches) {
     uint64_t coverage = memory->has_effective_total ? nxmt_percent_milli(arena->size, memory->effective_total_memory) : 0;
 
     snprintf(out, out_size,
@@ -394,6 +397,9 @@ static void format_report(
         "Physical Coverage MilliPercent: %llu\n"
         "Bytes Written: %llu\n"
         "Bytes Verified: %llu\n"
+        "GPU Pumped Bytes: %llu\n"
+        "GPU Verify Batches: %llu\n"
+        "GPU Verify Error Batches: %llu\n"
         "Elapsed ms: %llu\n"
         "Errors: %llu\n"
         "First Error Offset: 0x%llx\n"
@@ -414,6 +420,9 @@ static void format_report(
         (unsigned long long)coverage,
         (unsigned long long)stats->bytes_written,
         (unsigned long long)stats->bytes_verified,
+        (unsigned long long)gpu_pumped_bytes,
+        (unsigned long long)gpu_pump_verified_batches,
+        (unsigned long long)gpu_pump_error_batches,
         (unsigned long long)elapsed_ms,
         (unsigned long long)report->error_count,
         (unsigned long long)(report->has_first_error ? report->first.offset : 0),
@@ -694,6 +703,7 @@ static void draw_results_section(
     uint64_t elapsed_ms,
     uint64_t gpu_pumped_bytes,
     uint64_t gpu_pump_error_batches,
+    uint64_t gpu_pump_verified_batches,
     bool log_ok) {
     char buf[64];
     tui_section_top("Result");
@@ -740,10 +750,15 @@ static void draw_results_section(
         }
         tui_kv("GPU Pumped", ANSI_CYAN, "%s", buf);
         snprintf(buf, sizeof(buf), "%llu",
-            (unsigned long long)gpu_pump_error_batches);
-        tui_kv("GPU Verify Errors",
-            gpu_pump_error_batches == 0 ? ANSI_GREEN : ANSI_RED,
-            "%s batches", buf);
+            (unsigned long long)gpu_pump_verified_batches);
+        tui_kv("GPU Verify Batches", ANSI_CYAN, "%s", buf);
+        if (gpu_pump_error_batches == 0) {
+            tui_kv("GPU Verify Status", ANSI_GREEN, "%s", "ok");
+        } else {
+            snprintf(buf, sizeof(buf), "%llu mismatched",
+                (unsigned long long)gpu_pump_error_batches);
+            tui_kv("GPU Verify Status", ANSI_RED, "%s", buf);
+        }
     }
     if (elapsed_ms > 0) {
         uint64_t total_bytes = total_stats->bytes_written + total_stats->bytes_verified + gpu_pumped_bytes;
@@ -877,8 +892,10 @@ int main(int argc, char **argv) {
     uint64_t gpu_pump_region = 0;
     atomic_uint_fast64_t gpu_pump_bytes;
     atomic_uint_fast64_t gpu_pump_err_batches;
+    atomic_uint_fast64_t gpu_pump_ver_batches;
     atomic_init(&gpu_pump_bytes, 0u);
     atomic_init(&gpu_pump_err_batches, 0u);
+    atomic_init(&gpu_pump_ver_batches, 0u);
     if ((mode == NXMT_MODE_MEMORY_LOAD || mode == NXMT_MODE_EXTREME)
         && arena.size >= 1024ull * NXMT_MIB_BYTES && workers >= 2u) {
         gpu_pump_region = 256ull * NXMT_MIB_BYTES;
@@ -891,7 +908,8 @@ int main(int argc, char **argv) {
             gpu_storage, gpu_pump_region,
             64ull * NXMT_MIB_BYTES, pump_core,
             seed,
-            &g_stop_requested, &gpu_pump_bytes, &gpu_pump_err_batches);
+            &g_stop_requested, &gpu_pump_bytes,
+            &gpu_pump_err_batches, &gpu_pump_ver_batches);
         if (gpu_pump_active) {
             workers -= 1u;
         } else {
@@ -1176,6 +1194,7 @@ int main(int argc, char **argv) {
     }
     uint64_t gpu_pumped = atomic_load(&gpu_pump_bytes);
     uint64_t gpu_err_batches = atomic_load(&gpu_pump_err_batches);
+    uint64_t gpu_ver_batches = atomic_load(&gpu_pump_ver_batches);
     if (gpu_err_batches > 0u) {
         /* GPU verify spotted mismatched bytes - escalate so the result
          * label reflects that the test caught something even if the CPU
@@ -1210,7 +1229,10 @@ int main(int argc, char **argv) {
         status,
         thread_fallback,
         atomic_load_explicit(&g_stop_requested, memory_order_relaxed),
-        elapsed);
+        elapsed,
+        gpu_pumped,
+        gpu_err_batches,
+        gpu_ver_batches);
     bool log_ok = nxmt_platform_write_report(report_text);
 
     tui_clear();
@@ -1221,7 +1243,7 @@ int main(int argc, char **argv) {
     draw_run_config_section(mode, workers, seed, duration_seconds);
     nxmt_platform_print("\n");
     draw_results_section(mode, workers, completed_workers, passes_completed, &arena, &total_stats, &report, status,
-        thread_fallback, elapsed, gpu_pumped, gpu_err_batches, log_ok);
+        thread_fallback, elapsed, gpu_pumped, gpu_err_batches, gpu_ver_batches, log_ok);
     nxmt_platform_print("\n");
     draw_footer_hint("[B] Back to menu    [PLUS] Exit");
     nxmt_platform_console_flush();

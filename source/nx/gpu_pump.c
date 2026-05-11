@@ -25,12 +25,6 @@ static void pump_log(const char *msg) {
     fclose(f);
 }
 
-static void pump_log_truncate(void) {
-    mkdir("sdmc:/switch/NX-MemTest", 0777);
-    mkdir("sdmc:/switch/NX-MemTest/logs", 0777);
-    FILE *f = fopen(NXMT_GPU_PUMP_LOG_PATH, "wb");
-    if (f != NULL) fclose(f);
-}
 
 #if defined(__ARM_NEON)
 #include <arm_neon.h>
@@ -66,6 +60,7 @@ static uint64_t g_pump_seed;
 static atomic_bool *g_pump_stop;
 static atomic_uint_fast64_t *g_pump_progress;
 static atomic_uint_fast64_t *g_pump_errors;
+static atomic_uint_fast64_t *g_pump_verified;
 
 static DkDevice    g_pump_device;
 static DkMemBlock  g_pump_cmd_mem;
@@ -338,6 +333,9 @@ static void pump_thread_entry(void *arg) {
             atomic_fetch_add_explicit(g_pump_progress,
                 per_iter_traffic * NXMT_GPU_PUMP_BATCH, memory_order_relaxed);
         }
+        if (g_pump_verified != NULL) {
+            atomic_fetch_add_explicit(g_pump_verified, 1u, memory_order_relaxed);
+        }
         if (g_pump_errors != NULL && *g_pump_result_word != 0u) {
             atomic_fetch_add_explicit(g_pump_errors, 1u, memory_order_relaxed);
         }
@@ -352,7 +350,8 @@ bool nxmt_gpu_pump_start(void *storage_base, uint64_t storage_size,
                          uint64_t seed,
                          atomic_bool *stop_requested,
                          atomic_uint_fast64_t *progress_bytes,
-                         atomic_uint_fast64_t *error_batches) {
+                         atomic_uint_fast64_t *error_batches,
+                         atomic_uint_fast64_t *verified_batches) {
     if (storage_base == NULL || stop_requested == NULL || buffer_size == 0u) {
         return false;
     }
@@ -367,6 +366,7 @@ bool nxmt_gpu_pump_start(void *storage_base, uint64_t storage_size,
     g_pump_stop = stop_requested;
     g_pump_progress = progress_bytes;
     g_pump_errors = error_batches;
+    g_pump_verified = verified_batches;
     atomic_store(&g_pump_init_done, false);
     atomic_store(&g_pump_init_failed, false);
     g_pump_error_seen = 0;

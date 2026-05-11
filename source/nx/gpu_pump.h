@@ -35,7 +35,8 @@ bool nxmt_gpu_pump_start(void *storage_base, uint64_t storage_size,
                          uint64_t seed,
                          atomic_bool *stop_requested,
                          atomic_uint_fast64_t *progress_bytes,
-                         atomic_uint_fast64_t *error_batches);
+                         atomic_uint_fast64_t *error_batches,
+                         atomic_uint_fast64_t *verified_batches);
 
 /* Joins the pump thread. Must be paired with a successful start. Safe to
  * call after stop_requested has been set (which is what we expect). */
