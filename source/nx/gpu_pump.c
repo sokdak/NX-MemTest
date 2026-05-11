@@ -314,7 +314,9 @@ static void pump_thread_entry(void *arg) {
     (void)arg;
     uint64_t buffer_aligned = (g_pump_buffer_bytes + NXMT_PAGE_BYTES - 1u)
                               & ~(uint64_t)(NXMT_PAGE_BYTES - 1u);
-    pump_log_truncate();
+    /* Note: we intentionally append rather than truncate so the pre-pump
+     * romfs probe from main.c stays in the same log. The "=== pump thread
+     * enter ===" marker delimits each pump session. */
     pump_log("=== pump thread enter ===");
     if (!pump_setup(buffer_aligned)) {
         pump_log("=== pump setup FAILED, tearing down ===");
