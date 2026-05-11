@@ -95,6 +95,17 @@ void nxmt_platform_get_memory(NxmtPlatformMemory *out) {
     out->has_switch_total = out->has_effective_total;
 }
 
+uint64_t nxmt_platform_core_mask(void) {
+    uint64_t mask = 0;
+    Result rc = svcGetInfo(&mask, InfoType_CoreMask, CUR_PROCESS_HANDLE, 0);
+    if (R_FAILED(rc) || mask == 0) {
+        /* Conservative fallback: cores 0..2 are always available to NRO
+         * homebrew under hbloader; core 3 is what we'd be testing for. */
+        return 0x7ull;
+    }
+    return mask;
+}
+
 uint64_t nxmt_platform_seed64(void) {
     uint64_t seed_pair[2] = {0, 0};
     if (envHasRandomSeed()) {

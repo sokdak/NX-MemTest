@@ -286,12 +286,14 @@ typedef struct NxmtWorkerContext {
     NxmtStatus status;
 } NxmtWorkerContext;
 
-static Thread g_worker_threads[3];
-static unsigned char g_worker_stacks[3][64 * 1024] __attribute__((aligned(4096)));
-static NxmtWorkerContext g_worker_contexts[3];
+#define NXMT_MAX_WORKERS 4u
+
+static Thread g_worker_threads[NXMT_MAX_WORKERS];
+static unsigned char g_worker_stacks[NXMT_MAX_WORKERS][64 * 1024] __attribute__((aligned(4096)));
+static NxmtWorkerContext g_worker_contexts[NXMT_MAX_WORKERS];
 static atomic_bool g_stop_requested;
 static atomic_uint g_finished_workers;
-static atomic_uint_fast64_t g_worker_progress[3];
+static atomic_uint_fast64_t g_worker_progress[NXMT_MAX_WORKERS];
 
 static void nxmt_worker_entry(void *arg) {
     NxmtWorkerContext *ctx = (NxmtWorkerContext*)arg;
@@ -500,9 +502,22 @@ static bool tui_choose_mode(uint64_t arena_size, NxmtMode *out_mode) {
     return false;
 }
 
-static uint32_t worker_count_for_mode(NxmtMode mode) {
-    (void)mode;
-    return 3u;
+/* Fills out_cpu_map with the cores we want each worker pinned to, in worker
+ * order, using only cores the kernel reports as accessible. Preferred order
+ * (core 2, 0, 1, 3) preserves the existing 3-worker affinity layout when
+ * core 3 isn't available, and otherwise grows to 4 workers. */
+static uint32_t collect_worker_cpu_map(int *out_cpu_map, uint32_t max_workers) {
+    uint64_t mask = nxmt_platform_core_mask();
+    static const int preferred_order[] = { 2, 0, 1, 3 };
+    uint32_t count = 0;
+    for (size_t i = 0; i < sizeof(preferred_order) / sizeof(preferred_order[0])
+                       && count < max_workers; ++i) {
+        int core = preferred_order[i];
+        if (mask & (1ull << core)) {
+            out_cpu_map[count++] = core;
+        }
+    }
+    return count;
 }
 
 typedef struct ProgressLayout {
@@ -705,9 +720,11 @@ int main(int argc, char **argv) {
     const uint64_t duration_ms = duration_seconds * 1000ull;
 
     uint64_t seed = nxmt_platform_seed64();
-    uint32_t workers = worker_count_for_mode(mode);
-    if (workers > 3u) {
-        workers = 3u;
+    int worker_cpu_map[NXMT_MAX_WORKERS];
+    uint32_t workers = collect_worker_cpu_map(worker_cpu_map, NXMT_MAX_WORKERS);
+    if (workers == 0u) {
+        workers = 1u;
+        worker_cpu_map[0] = -2; /* libnx default core */
     }
 
     tui_clear();
@@ -744,7 +761,6 @@ int main(int argc, char **argv) {
     if (pass_total_work == 0) {
         pass_total_work = 1;
     }
-    static const int worker_cpu_map[3] = {2, 0, 1};
     uint64_t pass_index = 0;
 
     for (;;) {

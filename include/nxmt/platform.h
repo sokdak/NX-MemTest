@@ -29,6 +29,9 @@ typedef struct NxmtPlatformMemory {
 } NxmtPlatformMemory;
 
 void nxmt_platform_get_memory(NxmtPlatformMemory *out);
+/* Bitmask of CPU cores the current process is allowed to schedule on.
+ * Bit n set means core n is usable for threadCreate affinity. */
+uint64_t nxmt_platform_core_mask(void);
 uint64_t nxmt_platform_seed64(void);
 uint64_t nxmt_platform_ticks_ms(void);
 void nxmt_platform_console_init(void);
