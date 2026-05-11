@@ -15,29 +15,17 @@ static const uint64_t kFixed5 = 0x5555555555555555ull;
 static const uint64_t kAddrPassMul = 0x100000001b3ull;
 static const uint64_t kRandPassMul = 0x9e3779b97f4a7c15ull;
 
-/* Prefetch ~512 bytes (8 cache lines) ahead of the read cursor so the next
- * NEON iterations have data in flight while the current iteration computes. */
-#define NXMT_PREFETCH_AHEAD_WORDS 64u
-
-#if NXMT_HAS_NEON
-/* Paired non-temporal store: writes 32 bytes (two 128-bit NEON regs) directly
- * to memory bypassing the data cache. This pushes write traffic to DRAM
- * instead of dirtying L1/L2, which is what we want when the goal is to
- * saturate memory bandwidth rather than measure cache throughput. */
-static inline void nxmt_stnp_q(uint64_t *dst, uint64x2_t a, uint64x2_t b) {
-    __asm__ volatile("stnp %q[a], %q[b], [%[dst]]"
-                     :
-                     : [a] "w"(a), [b] "w"(b), [dst] "r"(dst)
-                     : "memory");
-}
-#endif
-
 static const NxmtPhase quick_phases[] = {
     NXMT_PHASE_FIXED_A,
     NXMT_PHASE_ADDRESS,
     NXMT_PHASE_RANDOM
 };
 
+/* NXMT_PHASE_NARROW is intentionally excluded from the bandwidth-mode phase
+ * arrays: STRB-driven byte writes are ~8x slower than 64-bit stores and would
+ * dominate the average throughput. The phase remains wired through
+ * patterns.c / write_chunk / verify_chunk so it can be invoked by a future
+ * correctness-focused mode. */
 static const NxmtPhase memory_load_phases[] = {
     NXMT_PHASE_FIXED_A,
     NXMT_PHASE_FIXED_5,
@@ -45,7 +33,6 @@ static const NxmtPhase memory_load_phases[] = {
     NXMT_PHASE_BITSPREAD,
     NXMT_PHASE_ADDRESS,
     NXMT_PHASE_RANDOM,
-    NXMT_PHASE_NARROW,
     NXMT_PHASE_WALKING
 };
 
@@ -106,36 +93,12 @@ static void nxmt_write_chunk(
     uint64_t seed,
     uint64_t pass) {
     switch (phase) {
-    case NXMT_PHASE_FIXED_A: {
-#if NXMT_HAS_NEON
-        const uint64x2_t pat = vdupq_n_u64(kFixedA);
-        uint64_t k = 0;
-        for (; k + 4 <= chunk_words; k += 4) {
-            nxmt_stnp_q(p + k, pat, pat);
-        }
-        for (; k < chunk_words; ++k) {
-            p[k] = kFixedA;
-        }
-#else
+    case NXMT_PHASE_FIXED_A:
         memset(p, 0xaa, chunk_words * sizeof(uint64_t));
-#endif
         break;
-    }
-    case NXMT_PHASE_FIXED_5: {
-#if NXMT_HAS_NEON
-        const uint64x2_t pat = vdupq_n_u64(kFixed5);
-        uint64_t k = 0;
-        for (; k + 4 <= chunk_words; k += 4) {
-            nxmt_stnp_q(p + k, pat, pat);
-        }
-        for (; k < chunk_words; ++k) {
-            p[k] = kFixed5;
-        }
-#else
+    case NXMT_PHASE_FIXED_5:
         memset(p, 0x55, chunk_words * sizeof(uint64_t));
-#endif
         break;
-    }
     case NXMT_PHASE_CHECKER: {
         const uint64_t a_first = (start_word & 1u) ? kFixed5 : kFixedA;
         const uint64_t b_first = a_first ^ (kFixedA ^ kFixed5);
@@ -143,7 +106,8 @@ static void nxmt_write_chunk(
 #if NXMT_HAS_NEON
         const uint64x2_t pat = vsetq_lane_u64(b_first, vdupq_n_u64(a_first), 1);
         for (; k + 4 <= chunk_words; k += 4) {
-            nxmt_stnp_q(p + k, pat, pat);
+            vst1q_u64(p + k,     pat);
+            vst1q_u64(p + k + 2, pat);
         }
 #endif
         for (; k + 2 <= chunk_words; k += 2) {
@@ -165,7 +129,8 @@ static void nxmt_write_chunk(
         uint64x2_t v01 = vsetq_lane_u64(base_off + 8u, vdupq_n_u64(base_off), 1);
         uint64x2_t v23 = vsetq_lane_u64(base_off + 24u, vdupq_n_u64(base_off + 16u), 1);
         for (; k + 4 <= chunk_words; k += 4) {
-            nxmt_stnp_q(p + k, veorq_u64(v01, mask2), veorq_u64(v23, mask2));
+            vst1q_u64(p + k,     veorq_u64(v01, mask2));
+            vst1q_u64(p + k + 2, veorq_u64(v23, mask2));
             v01 = vaddq_u64(v01, step4);
             v23 = vaddq_u64(v23, step4);
         }
@@ -186,7 +151,8 @@ static void nxmt_write_chunk(
         for (; k + 4 <= chunk_words; k += 4) {
             uint64x2_t r01 = vreinterpretq_u64_u8(vrev64q_u8(vreinterpretq_u8_u64(idx01)));
             uint64x2_t r23 = vreinterpretq_u64_u8(vrev64q_u8(vreinterpretq_u8_u64(idx23)));
-            nxmt_stnp_q(p + k, veorq_u64(r01, mask2), veorq_u64(r23, mask2));
+            vst1q_u64(p + k,     veorq_u64(r01, mask2));
+            vst1q_u64(p + k + 2, veorq_u64(r23, mask2));
             idx01 = vaddq_u64(idx01, step4);
             idx23 = vaddq_u64(idx23, step4);
         }
@@ -210,7 +176,8 @@ static void nxmt_write_chunk(
             int64x2_t s23 = vandq_s64(idx23, mask63);
             uint64x2_t v01 = vreinterpretq_u64_s64(vshlq_s64(one, s01));
             uint64x2_t v23 = vreinterpretq_u64_s64(vshlq_s64(one, s23));
-            nxmt_stnp_q(p + k, v01, v23);
+            vst1q_u64(p + k,     v01);
+            vst1q_u64(p + k + 2, v23);
             idx01 = vaddq_s64(idx01, step4);
             idx23 = vaddq_s64(idx23, step4);
         }
@@ -242,7 +209,8 @@ static void nxmt_write_chunk(
 #if NXMT_HAS_NEON
         const uint64x2_t pat = vsetq_lane_u64(b_first, vdupq_n_u64(a_first), 1);
         for (; k + 4 <= chunk_words; k += 4) {
-            nxmt_stnp_q(p + k, pat, pat);
+            vst1q_u64(p + k,     pat);
+            vst1q_u64(p + k + 2, pat);
         }
 #endif
         for (; k + 2 <= chunk_words; k += 2) {
@@ -325,12 +293,7 @@ static void nxmt_verify_chunk(
         uint64x2_t v01 = vsetq_lane_u64(base_off + 8u, vdupq_n_u64(base_off), 1);
         uint64x2_t v23 = vsetq_lane_u64(base_off + 24u, vdupq_n_u64(base_off + 16u), 1);
         uint64x2_t acc_v = vdupq_n_u64(0);
-        const uint64_t prefetch_limit = chunk_words > NXMT_PREFETCH_AHEAD_WORDS
-            ? chunk_words - NXMT_PREFETCH_AHEAD_WORDS : 0;
         for (; k + 4 <= chunk_words; k += 4) {
-            if (k < prefetch_limit) {
-                __builtin_prefetch(p + k + NXMT_PREFETCH_AHEAD_WORDS, 0, 0);
-            }
             uint64x2_t e01 = veorq_u64(v01, mask2);
             uint64x2_t e23 = veorq_u64(v23, mask2);
             uint64x2_t a01 = vld1q_u64(p + k);
@@ -366,12 +329,7 @@ static void nxmt_verify_chunk(
         const uint64x2_t step2 = vdupq_n_u64(2u);
         uint64x2_t idx = vsetq_lane_u64(start_word + 1u, vdupq_n_u64(start_word), 1);
         uint64x2_t acc_v = vdupq_n_u64(0);
-        const uint64_t prefetch_limit = chunk_words > NXMT_PREFETCH_AHEAD_WORDS
-            ? chunk_words - NXMT_PREFETCH_AHEAD_WORDS : 0;
         for (; k + 2 <= chunk_words; k += 2) {
-            if (k < prefetch_limit) {
-                __builtin_prefetch(p + k + NXMT_PREFETCH_AHEAD_WORDS, 0, 0);
-            }
             uint8x16_t bytes = vreinterpretq_u8_u64(idx);
             uint64x2_t rev = vreinterpretq_u64_u8(vrev64q_u8(bytes));
             uint64x2_t expected = veorq_u64(rev, mask2);

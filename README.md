@@ -9,7 +9,7 @@ the loader-provided `OverrideHeap` as its directly verified test arena.
 | Mode         | Arena need | Phases                                                                          | Notes                                            |
 | ------------ | ---------- | ------------------------------------------------------------------------------- | ------------------------------------------------ |
 | Quick Check  | any        | fixed-A, address, random                                                        | Smoke test, allowed in applet / small heap.      |
-| Memory Load  | >= 256 MiB | fixed-A, fixed-5, checker, bitspread, address, random, narrow, walking          | Long-running RAM stability.                      |
+| Memory Load  | >= 256 MiB | fixed-A, fixed-5, checker, bitspread, address, random, walking                  | Long-running RAM stability.                      |
 | Extreme      | >= 512 MiB | same as Memory Load + per-word CPU pressure on each word                        | Drives controller, thermals, power; 3 workers.   |
 
 Each phase performs a streaming write across the worker's slice of the arena,

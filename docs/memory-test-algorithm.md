@@ -59,12 +59,17 @@ Defined in `source/core/runner.c`:
 
 - **Quick Check** (`NXMT_MODE_QUICK`): `FIXED_A`, `ADDRESS`, `RANDOM`.
 - **Memory Load** (`NXMT_MODE_MEMORY_LOAD`): `FIXED_A`, `FIXED_5`, `CHECKER`,
-  `BITSPREAD`, `ADDRESS`, `RANDOM`, `NARROW`, `WALKING`.
+  `BITSPREAD`, `ADDRESS`, `RANDOM`, `WALKING`.
 - **Extreme** (`NXMT_MODE_EXTREME`): same as Memory Load, plus
   `nxmt_extreme_cpu_pressure` is folded over every word during both write and
   verify (see "Extreme CPU pressure").
 
-`nxmt_runner_phase_count(mode)` returns 3 or 8 accordingly. The TUI uses this
+`nxmt_runner_phase_count(mode)` returns 3 or 7 accordingly.
+
+`NXMT_PHASE_NARROW` is defined and tested but not currently included in any
+mode's phase table: byte-granularity `STRB` stores are roughly an order of
+magnitude slower than 64-bit stores and would dominate the bandwidth-mode
+average. It is reserved for a future correctness-focused mode. The TUI uses this
 to size the progress bar before launching workers.
 
 ## Pass Structure
@@ -120,23 +125,14 @@ NEON loop (two `uint64x2_t` registers) that writes/verifies 32 bytes per
 iteration; the tail uses the scalar fallback. On host (x86, etc.) only the
 scalar fallback runs.
 
-### Non-temporal stores (write side)
-
-On aarch64 the write loop emits paired non-temporal stores (`stnp q, q`) via
-`nxmt_stnp_q`. This bypasses L1/L2 and streams writes directly to the memory
-system, so cache-friendly write-back doesn't cap the test at L2 throughput.
-The pattern values are still computed in NEON registers; only the store
-instruction changes. Misaligned 16-byte addresses are tolerated by Cortex-A57
-when SCTLR.A=0 (default for user mode), at a small per-access penalty.
-
-### Software prefetch (verify side)
-
-`ADDRESS` and `RANDOM` verify loops issue `__builtin_prefetch` 64 words
-(~512 bytes / 8 cache lines) ahead of the read cursor. Combined with NT
-stores on the matching write phase, this keeps DRAM read traffic flowing
-while NEON computes the expected value in parallel. `FIXED_*`, `CHECKER`,
-and `WALKING` rely on the hardware stride prefetcher only — their per-word
-compute is cheap enough that prefetch overhead is not worth the bookkeeping.
+An earlier revision used paired non-temporal stores (`stnp q, q`) and
+software prefetch ahead of the verify cursor, intending to bypass L1/L2 and
+push more traffic to DRAM. On Cortex-A57 (Switch) this measurably
+regressed throughput — the A57 implementation aliases `STNP` to `STP` per
+its TRM (the non-temporal hint is dropped), and software prefetch contended
+with the hardware stride prefetcher. That experiment was reverted; the
+write path is back to ordinary cache-friendly `vst1q_u64` pairs and the
+verify path relies on the hardware prefetcher alone.
 
 ### Two-stage verify
 
