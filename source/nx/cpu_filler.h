@@ -3,11 +3,12 @@
 #include <stdatomic.h>
 #include <stdbool.h>
 
-/* Spawns a thread that imposes a ~50% duty-cycle CPU load on a single
+/* Spawns a thread that imposes a ~90% duty-cycle CPU load on a single
  * pinned core. The work is pure ALU (mix64 + xorshift) and does not touch
  * memory, so it doesn't compete with the memory workers or the GPU pump
- * for DRAM bandwidth - it just keeps the assigned core busy half the time
- * for thermal / power stress purposes.
+ * for DRAM bandwidth - it just keeps the assigned core near-saturated for
+ * thermal / power stress purposes while still leaving a sliver of idle
+ * time so the pump's dkQueueSubmitCommands wakes don't get delayed.
  *
  * core_id: aarch64 affinity index for the pinned core.
  * stop_requested: shared atomic the caller toggles to signal shutdown.

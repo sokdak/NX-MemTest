@@ -5,8 +5,11 @@
 #include "nxmt/platform.h"
 #include "nxmt/patterns.h"
 
-#define NXMT_FILLER_BURST_MS 50ull
-#define NXMT_FILLER_SLEEP_NS (50ull * 1000000ull)
+/* 90 ms burst + 10 ms sleep = ~90% duty cycle. Larger windows than the
+ * earlier 50/50 split because we want the pump core saturated while still
+ * leaving headroom for dkQueueSubmitCommands wakes between batches. */
+#define NXMT_FILLER_BURST_MS 90ull
+#define NXMT_FILLER_SLEEP_NS (10ull * 1000000ull)
 
 static Thread g_filler_thread;
 static unsigned char g_filler_stack[16 * 1024] __attribute__((aligned(0x1000)));
