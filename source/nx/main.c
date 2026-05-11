@@ -7,6 +7,7 @@
 #include "nxmt/platform.h"
 #include "nxmt/runner.h"
 #include "gpu_bench.h"
+#include "gpu_pump.h"
 
 #define NXMT_LOG_PATH "sdmc:/switch/NX-MemTest/logs/latest.txt"
 
@@ -680,6 +681,7 @@ static void draw_results_section(
     NxmtStatus status,
     bool thread_fallback,
     uint64_t elapsed_ms,
+    uint64_t gpu_pumped_bytes,
     bool log_ok) {
     char buf[64];
     tui_section_top("Result");
@@ -714,8 +716,20 @@ static void draw_results_section(
             (unsigned long long)(total_stats->bytes_verified / NXMT_MIB_BYTES));
     }
     tui_kv("Tested", ANSI_YELLOW, "%s", buf);
+    if (gpu_pumped_bytes > 0) {
+        if (gpu_pumped_bytes >= 1024ull * NXMT_MIB_BYTES) {
+            uint64_t gib_x100 = (gpu_pumped_bytes * 100ull) / (1024ull * NXMT_MIB_BYTES);
+            snprintf(buf, sizeof(buf), "%llu.%02llu GiB",
+                (unsigned long long)(gib_x100 / 100ull),
+                (unsigned long long)(gib_x100 % 100ull));
+        } else {
+            snprintf(buf, sizeof(buf), "%llu MiB",
+                (unsigned long long)(gpu_pumped_bytes / NXMT_MIB_BYTES));
+        }
+        tui_kv("GPU Pumped", ANSI_CYAN, "%s", buf);
+    }
     if (elapsed_ms > 0) {
-        uint64_t total_bytes = total_stats->bytes_written + total_stats->bytes_verified;
+        uint64_t total_bytes = total_stats->bytes_written + total_stats->bytes_verified + gpu_pumped_bytes;
         uint64_t mb_per_s = (total_bytes / 1000000ull) * 1000ull / elapsed_ms;
         if (mb_per_s >= 1000ull) {
             snprintf(buf, sizeof(buf), "%llu.%llu GB/s",
@@ -827,6 +841,34 @@ int main(int argc, char **argv) {
         worker_cpu_map[0] = -2; /* libnx default core */
     }
 
+    /* Memory Load and Extreme are "max bus traffic" modes - in addition to
+     * the CPU workers, carve a 256 MiB tail off the arena for a GPU copy
+     * pump that runs concurrently and adds another stream of bus traffic.
+     * The reserved region isn't tested by CPU this run; on the next pass
+     * the CPU side rewrites everything anyway. Quick Check stays CPU-only. */
+    NxmtArena cpu_arena = arena;
+    bool gpu_pump_active = false;
+    uint64_t gpu_pump_region = 0;
+    atomic_uint_fast64_t gpu_pump_bytes;
+    atomic_init(&gpu_pump_bytes, 0u);
+    if ((mode == NXMT_MODE_MEMORY_LOAD || mode == NXMT_MODE_EXTREME)
+        && arena.size >= 1024ull * NXMT_MIB_BYTES) {
+        gpu_pump_region = 256ull * NXMT_MIB_BYTES;
+        cpu_arena.size  = arena.size - gpu_pump_region;
+        cpu_arena.words = cpu_arena.size / NXMT_WORD_BYTES;
+        void *gpu_storage = arena.base + cpu_arena.size;
+        atomic_init(&g_stop_requested, false);
+        gpu_pump_active = nxmt_gpu_pump_start(
+            gpu_storage, gpu_pump_region,
+            64ull * NXMT_MIB_BYTES,
+            &g_stop_requested, &gpu_pump_bytes);
+        if (!gpu_pump_active) {
+            /* GPU pump failed; revert to full-arena CPU-only operation. */
+            cpu_arena = arena;
+            gpu_pump_region = 0;
+        }
+    }
+
     tui_clear();
     draw_header();
     nxmt_platform_print("\n");
@@ -860,7 +902,7 @@ int main(int argc, char **argv) {
 
     const char spinner_chars[] = {'|', '/', '-', '\\'};
     uint32_t phase_count = nxmt_runner_phase_count(mode);
-    uint64_t pass_total_work = (uint64_t)phase_count * 2u * arena.size;
+    uint64_t pass_total_work = (uint64_t)phase_count * 2u * cpu_arena.size;
     if (pass_total_work == 0) {
         pass_total_work = 1;
     }
@@ -883,7 +925,7 @@ int main(int argc, char **argv) {
         uint32_t started_threads = 0;
 
         for (uint32_t worker = 0; worker < workers; ++worker) {
-            init_worker_context(&g_worker_contexts[worker], &arena, mode, seed, worker, workers, &g_stop_requested);
+            init_worker_context(&g_worker_contexts[worker], &cpu_arena, mode, seed, worker, workers, &g_stop_requested);
             g_worker_contexts[worker].config.pass = pass_index;
             atomic_init(&g_worker_progress[worker], 0u);
             g_worker_contexts[worker].config.progress_bytes = &g_worker_progress[worker];
@@ -1004,22 +1046,28 @@ int main(int argc, char **argv) {
                     info.milli = nxmt_percent_milli(pass_done, pass_total_work);
                 }
                 info.header_extra = header;
-                uint64_t cumulative_bytes = total_stats.bytes_written + total_stats.bytes_verified + pass_done;
+                uint64_t gpu_so_far = atomic_load_explicit(&gpu_pump_bytes, memory_order_relaxed);
+                uint64_t cumulative_bytes = total_stats.bytes_written + total_stats.bytes_verified
+                                          + pass_done + gpu_so_far;
                 if (cumulative_bytes >= 1024ull * NXMT_MIB_BYTES) {
                     snprintf(info_text, sizeof(info_text),
                         "Pass " ANSI_YELLOW "%llu" ANSI_RESET
-                        "    Tested " ANSI_YELLOW "%llu" ANSI_RESET " GiB"
-                        "    Errors " ANSI_YELLOW "%llu" ANSI_RESET,
+                        "    Bus " ANSI_YELLOW "%llu" ANSI_RESET " GiB"
+                        "    GPU " ANSI_CYAN "%llu" ANSI_RESET " GiB"
+                        "    Err " ANSI_YELLOW "%llu" ANSI_RESET,
                         (unsigned long long)(pass_index + 1),
                         (unsigned long long)(cumulative_bytes / (1024ull * NXMT_MIB_BYTES)),
+                        (unsigned long long)(gpu_so_far / (1024ull * NXMT_MIB_BYTES)),
                         (unsigned long long)report.error_count);
                 } else {
                     snprintf(info_text, sizeof(info_text),
                         "Pass " ANSI_YELLOW "%llu" ANSI_RESET
-                        "    Tested " ANSI_YELLOW "%llu" ANSI_RESET " MiB"
-                        "    Errors " ANSI_YELLOW "%llu" ANSI_RESET,
+                        "    Bus " ANSI_YELLOW "%llu" ANSI_RESET " MiB"
+                        "    GPU " ANSI_CYAN "%llu" ANSI_RESET " MiB"
+                        "    Err " ANSI_YELLOW "%llu" ANSI_RESET,
                         (unsigned long long)(pass_index + 1),
                         (unsigned long long)(cumulative_bytes / NXMT_MIB_BYTES),
+                        (unsigned long long)(gpu_so_far / NXMT_MIB_BYTES),
                         (unsigned long long)report.error_count);
                 }
                 info.info_text = info_text;
@@ -1056,7 +1104,7 @@ int main(int argc, char **argv) {
     if (thread_fallback) {
         NxmtWorkerContext context;
         atomic_store_explicit(&g_stop_requested, false, memory_order_relaxed);
-        init_worker_context(&context, &arena, mode, seed, 0, 1u, &g_stop_requested);
+        init_worker_context(&context, &cpu_arena, mode, seed, 0, 1u, &g_stop_requested);
         context.config.pass = pass_index;
         nxmt_report_init(&context.report);
         memset(&context.stats, 0, sizeof(context.stats));
@@ -1064,10 +1112,18 @@ int main(int argc, char **argv) {
         tui_goto(progress_layout.row_line, 1u);
         tui_text_line(ANSI_YELLOW, "%s", "Thread setup failed; running single-worker fallback.");
         nxmt_platform_console_flush();
-        context.status = nxmt_runner_run_pass(&arena, &context.config, &context.report, &context.stats);
+        context.status = nxmt_runner_run_pass(&cpu_arena, &context.config, &context.report, &context.stats);
         merge_worker_context(&context, &report, &total_stats, &status, &completed_workers);
         passes_completed += 1u;
     }
+
+    /* Make sure the GPU pump observes stop_requested = true and drains its
+     * in-flight commands before we tally bytes pumped. */
+    atomic_store_explicit(&g_stop_requested, true, memory_order_relaxed);
+    if (gpu_pump_active) {
+        nxmt_gpu_pump_stop();
+    }
+    uint64_t gpu_pumped = atomic_load(&gpu_pump_bytes);
 
     uint64_t elapsed = nxmt_platform_ticks_ms() - test_started;
 
@@ -1097,7 +1153,7 @@ int main(int argc, char **argv) {
     draw_run_config_section(mode, workers, seed, duration_seconds);
     nxmt_platform_print("\n");
     draw_results_section(mode, workers, completed_workers, passes_completed, &arena, &total_stats, &report, status,
-        thread_fallback, elapsed, log_ok);
+        thread_fallback, elapsed, gpu_pumped, log_ok);
     nxmt_platform_print("\n");
     draw_footer_hint("[PLUS] Exit");
     nxmt_platform_console_flush();
