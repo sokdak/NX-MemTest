@@ -188,15 +188,25 @@ static void nxmt_write_chunk(
         const uint64_t mask = seed ^ (pass * kAddrPassMul);
         uint64_t k = 0;
 #if NXMT_HAS_NEON
+        /* 8-word unroll: A57 can retire 2 NEON stores per cycle but the
+         * 4-word loop only issued ~1 store/cycle on average. Doubling
+         * unroll lets the second store-pipe stay busy while the first
+         * iteration's pattern compute is still in flight. */
         const uint64x2_t mask2 = vdupq_n_u64(mask);
-        const uint64x2_t step4 = vdupq_n_u64(32u);
-        uint64x2_t v01 = vsetq_lane_u64(base_off + 8u, vdupq_n_u64(base_off), 1);
+        const uint64x2_t step8 = vdupq_n_u64(64u);
+        uint64x2_t v01 = vsetq_lane_u64(base_off + 8u,  vdupq_n_u64(base_off), 1);
         uint64x2_t v23 = vsetq_lane_u64(base_off + 24u, vdupq_n_u64(base_off + 16u), 1);
-        for (; k + 4 <= chunk_words; k += 4) {
+        uint64x2_t v45 = vsetq_lane_u64(base_off + 40u, vdupq_n_u64(base_off + 32u), 1);
+        uint64x2_t v67 = vsetq_lane_u64(base_off + 56u, vdupq_n_u64(base_off + 48u), 1);
+        for (; k + 8 <= chunk_words; k += 8) {
             vst1q_u64(p + k,     veorq_u64(v01, mask2));
             vst1q_u64(p + k + 2, veorq_u64(v23, mask2));
-            v01 = vaddq_u64(v01, step4);
-            v23 = vaddq_u64(v23, step4);
+            vst1q_u64(p + k + 4, veorq_u64(v45, mask2));
+            vst1q_u64(p + k + 6, veorq_u64(v67, mask2));
+            v01 = vaddq_u64(v01, step8);
+            v23 = vaddq_u64(v23, step8);
+            v45 = vaddq_u64(v45, step8);
+            v67 = vaddq_u64(v67, step8);
         }
 #endif
         for (; k < chunk_words; ++k) {
@@ -209,16 +219,24 @@ static void nxmt_write_chunk(
         uint64_t k = 0;
 #if NXMT_HAS_NEON
         const uint64x2_t mask2 = vdupq_n_u64(mask);
-        const uint64x2_t step4 = vdupq_n_u64(4u);
+        const uint64x2_t step8 = vdupq_n_u64(8u);
         uint64x2_t idx01 = vsetq_lane_u64(start_word + 1u, vdupq_n_u64(start_word), 1);
         uint64x2_t idx23 = vsetq_lane_u64(start_word + 3u, vdupq_n_u64(start_word + 2u), 1);
-        for (; k + 4 <= chunk_words; k += 4) {
+        uint64x2_t idx45 = vsetq_lane_u64(start_word + 5u, vdupq_n_u64(start_word + 4u), 1);
+        uint64x2_t idx67 = vsetq_lane_u64(start_word + 7u, vdupq_n_u64(start_word + 6u), 1);
+        for (; k + 8 <= chunk_words; k += 8) {
             uint64x2_t r01 = vreinterpretq_u64_u8(vrev64q_u8(vreinterpretq_u8_u64(idx01)));
             uint64x2_t r23 = vreinterpretq_u64_u8(vrev64q_u8(vreinterpretq_u8_u64(idx23)));
+            uint64x2_t r45 = vreinterpretq_u64_u8(vrev64q_u8(vreinterpretq_u8_u64(idx45)));
+            uint64x2_t r67 = vreinterpretq_u64_u8(vrev64q_u8(vreinterpretq_u8_u64(idx67)));
             vst1q_u64(p + k,     veorq_u64(r01, mask2));
             vst1q_u64(p + k + 2, veorq_u64(r23, mask2));
-            idx01 = vaddq_u64(idx01, step4);
-            idx23 = vaddq_u64(idx23, step4);
+            vst1q_u64(p + k + 4, veorq_u64(r45, mask2));
+            vst1q_u64(p + k + 6, veorq_u64(r67, mask2));
+            idx01 = vaddq_u64(idx01, step8);
+            idx23 = vaddq_u64(idx23, step8);
+            idx45 = vaddq_u64(idx45, step8);
+            idx67 = vaddq_u64(idx67, step8);
         }
 #endif
         for (; k < chunk_words; ++k) {
@@ -232,18 +250,28 @@ static void nxmt_write_chunk(
 #if NXMT_HAS_NEON
         const int64x2_t mask63 = vdupq_n_s64(63);
         const int64x2_t one = vdupq_n_s64(1);
-        const int64x2_t step4 = vdupq_n_s64(4);
+        const int64x2_t step8 = vdupq_n_s64(8);
         int64x2_t idx01 = vsetq_lane_s64((int64_t)(pos_base + 1u), vdupq_n_s64((int64_t)pos_base), 1);
         int64x2_t idx23 = vsetq_lane_s64((int64_t)(pos_base + 3u), vdupq_n_s64((int64_t)(pos_base + 2u)), 1);
-        for (; k + 4 <= chunk_words; k += 4) {
+        int64x2_t idx45 = vsetq_lane_s64((int64_t)(pos_base + 5u), vdupq_n_s64((int64_t)(pos_base + 4u)), 1);
+        int64x2_t idx67 = vsetq_lane_s64((int64_t)(pos_base + 7u), vdupq_n_s64((int64_t)(pos_base + 6u)), 1);
+        for (; k + 8 <= chunk_words; k += 8) {
             int64x2_t s01 = vandq_s64(idx01, mask63);
             int64x2_t s23 = vandq_s64(idx23, mask63);
+            int64x2_t s45 = vandq_s64(idx45, mask63);
+            int64x2_t s67 = vandq_s64(idx67, mask63);
             uint64x2_t v01 = vreinterpretq_u64_s64(vshlq_s64(one, s01));
             uint64x2_t v23 = vreinterpretq_u64_s64(vshlq_s64(one, s23));
+            uint64x2_t v45 = vreinterpretq_u64_s64(vshlq_s64(one, s45));
+            uint64x2_t v67 = vreinterpretq_u64_s64(vshlq_s64(one, s67));
             vst1q_u64(p + k,     v01);
             vst1q_u64(p + k + 2, v23);
-            idx01 = vaddq_s64(idx01, step4);
-            idx23 = vaddq_s64(idx23, step4);
+            vst1q_u64(p + k + 4, v45);
+            vst1q_u64(p + k + 6, v67);
+            idx01 = vaddq_s64(idx01, step8);
+            idx23 = vaddq_s64(idx23, step8);
+            idx45 = vaddq_s64(idx45, step8);
+            idx67 = vaddq_s64(idx67, step8);
         }
 #endif
         for (; k < chunk_words; ++k) {
