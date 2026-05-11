@@ -486,17 +486,40 @@ static void run_gpu_bench_screen(const NxmtArena *arena, const NxmtPlatformMemor
     draw_header();
     nxmt_platform_print("\n");
     tui_section_top("GPU Bandwidth PoC");
-    tui_text_line(ANSI_DIM, "%s", "Running deko3d buffer copies on the GPU copy engine...");
+    tui_text_line(ANSI_DIM, "%s",
+        "Stepping deko3d buffer size up until the kernel runs out of headroom.");
     tui_section_bottom();
     nxmt_platform_print("\n");
     nxmt_platform_console_flush();
 
-    /* Start conservative: 4 MiB per buffer x 32 iterations = 128 MiB of
-     * copy traffic. Most of physical RAM is locked up in the OverrideHeap
-     * arena, so deko3d's kernel-side allocations have to fit in whatever
-     * the kernel keeps in reserve. Tune up once we confirm the path
-     * survives end-to-end. */
-    nxmt_gpu_bench_run(4ull * NXMT_MIB_BYTES, 32u);
+    /* Each call allocates two src+dst buffers and one 64 KiB cmd block,
+     * then frees them, so peak transient memory pressure is roughly
+     * size * 2. Iterations chosen so each step moves ~512 MiB of bytes,
+     * which keeps measurement noise low without dragging total run time
+     * past a few seconds. */
+    static const struct {
+        uint64_t size_mib;
+        uint32_t iters;
+    } steps[] = {
+        {   4, 64 },
+        {  16, 32 },
+        {  32, 16 },
+        {  64,  8 },
+        { 128,  4 },
+        { 256,  2 },
+    };
+    for (size_t i = 0; i < sizeof(steps) / sizeof(steps[0]); ++i) {
+        nxmt_platform_print(ANSI_BOLD "== buffer %llu MiB x %u iters ==" ANSI_RESET "\n",
+            (unsigned long long)steps[i].size_mib, steps[i].iters);
+        nxmt_platform_console_flush();
+        bool ok = nxmt_gpu_bench_run(steps[i].size_mib * NXMT_MIB_BYTES, steps[i].iters);
+        if (!ok) {
+            nxmt_platform_print(ANSI_YELLOW
+                "  step failed - stopping sweep at %llu MiB\n" ANSI_RESET,
+                (unsigned long long)steps[i].size_mib);
+            break;
+        }
+    }
 
     nxmt_platform_print("\n");
     draw_footer_hint("[B] / [PLUS] back to menu");
