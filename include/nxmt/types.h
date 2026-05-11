@@ -24,7 +24,8 @@ typedef enum NxmtPhase {
     NXMT_PHASE_RANDOM = 4,
     NXMT_PHASE_WALKING = 5,
     NXMT_PHASE_NARROW = 6,
-    NXMT_PHASE_BITSPREAD = 7
+    NXMT_PHASE_BITSPREAD = 7,
+    NXMT_PHASE_STREAM = 8
 } NxmtPhase;
 
 typedef enum NxmtStatus {

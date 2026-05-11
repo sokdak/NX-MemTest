@@ -44,5 +44,16 @@ int main(void) {
     failed |= expect_u64(nxmt_expected_value(seed, NXMT_PHASE_BITSPREAD, 1, 0),
                          0xb6db6db6db6db6dbull);
 
+    /* STREAM repeats every 8 KiB (offset & 0x1fff). At offset 0 with pass 0
+     * the formula reduces to seed. Period rollover at offset 0x2000 must
+     * return the same value as offset 0. */
+    failed |= expect_u64(nxmt_expected_value(seed, NXMT_PHASE_STREAM, 0, 0), seed);
+    failed |= expect_u64(nxmt_expected_value(seed, NXMT_PHASE_STREAM, 0, 8),
+                         0x8ull ^ seed);
+    failed |= expect_u64(nxmt_expected_value(seed, NXMT_PHASE_STREAM, 0, 0x2000),
+                         seed);
+    failed |= expect_u64(nxmt_expected_value(seed, NXMT_PHASE_STREAM, 1, 0),
+                         seed ^ 0xbf58476d1ce4e5b9ull);
+
     return failed;
 }

@@ -14,6 +14,13 @@ static const uint64_t kFixedA = 0xaaaaaaaaaaaaaaaaull;
 static const uint64_t kFixed5 = 0x5555555555555555ull;
 static const uint64_t kAddrPassMul = 0x100000001b3ull;
 static const uint64_t kRandPassMul = 0x9e3779b97f4a7c15ull;
+/* Must match the constant used in patterns.c NXMT_PHASE_STREAM case. */
+static const uint64_t kStreamPassMul = 0xbf58476d1ce4e5b9ull;
+
+/* STREAM stamp size in words. Power of 2 (so the stamp_pos wrap is a mask),
+ * 1024 words = 8 KiB which fits well inside the 32 KiB A57 L1D and leaves
+ * plenty of room on the 64 KiB worker stack. */
+#define NXMT_STREAM_STAMP_WORDS 1024u
 
 static const NxmtPhase quick_phases[] = {
     NXMT_PHASE_FIXED_A,
@@ -31,6 +38,7 @@ static const NxmtPhase memory_load_phases[] = {
     NXMT_PHASE_FIXED_5,
     NXMT_PHASE_CHECKER,
     NXMT_PHASE_BITSPREAD,
+    NXMT_PHASE_STREAM,
     NXMT_PHASE_ADDRESS,
     NXMT_PHASE_RANDOM,
     NXMT_PHASE_WALKING
@@ -38,6 +46,62 @@ static const NxmtPhase memory_load_phases[] = {
 
 static const uint64_t kBitSpread0 = 0x4924924924924924ull;
 static const uint64_t kBitSpread1 = 0xb6db6db6db6db6dbull;
+
+/* Builds the STREAM stamp: stamp[k] = (k * 8) ^ seed ^ (pass * kStreamPassMul).
+ * Called once per chunk; the stamp is then bulk-copied across the chunk so
+ * per-word pattern compute happens once per chunk instead of per word. */
+static void nxmt_fill_stream_stamp(uint64_t *stamp, uint64_t seed, uint64_t pass) {
+    const uint64_t mask = seed ^ (pass * kStreamPassMul);
+    uint64_t k = 0;
+#if NXMT_HAS_NEON
+    const uint64x2_t mask2 = vdupq_n_u64(mask);
+    const uint64x2_t step4 = vdupq_n_u64(32u);
+    uint64x2_t off01 = vsetq_lane_u64(8u, vdupq_n_u64(0u), 1);
+    uint64x2_t off23 = vsetq_lane_u64(24u, vdupq_n_u64(16u), 1);
+    for (; k + 4 <= NXMT_STREAM_STAMP_WORDS; k += 4) {
+        vst1q_u64(stamp + k,     veorq_u64(off01, mask2));
+        vst1q_u64(stamp + k + 2, veorq_u64(off23, mask2));
+        off01 = vaddq_u64(off01, step4);
+        off23 = vaddq_u64(off23, step4);
+    }
+#endif
+    for (; k < NXMT_STREAM_STAMP_WORDS; ++k) {
+        stamp[k] = (k * (uint64_t)NXMT_WORD_BYTES) ^ mask;
+    }
+}
+
+/* memcpy-equivalent inner loop tuned for A57: 16 words (128 bytes) per
+ * iteration, eight independent loads followed by eight stores, lets the
+ * core issue close to 2 stores/cycle while the load pipeline keeps the
+ * register file fed from a hot stamp in L1. */
+static void nxmt_neon_copy_words(uint64_t * __restrict__ dst,
+                                  const uint64_t * __restrict__ src,
+                                  uint64_t words) {
+    uint64_t k = 0;
+#if NXMT_HAS_NEON
+    for (; k + 16 <= words; k += 16) {
+        uint64x2_t a0 = vld1q_u64(src + k);
+        uint64x2_t a1 = vld1q_u64(src + k + 2);
+        uint64x2_t a2 = vld1q_u64(src + k + 4);
+        uint64x2_t a3 = vld1q_u64(src + k + 6);
+        uint64x2_t a4 = vld1q_u64(src + k + 8);
+        uint64x2_t a5 = vld1q_u64(src + k + 10);
+        uint64x2_t a6 = vld1q_u64(src + k + 12);
+        uint64x2_t a7 = vld1q_u64(src + k + 14);
+        vst1q_u64(dst + k,      a0);
+        vst1q_u64(dst + k + 2,  a1);
+        vst1q_u64(dst + k + 4,  a2);
+        vst1q_u64(dst + k + 6,  a3);
+        vst1q_u64(dst + k + 8,  a4);
+        vst1q_u64(dst + k + 10, a5);
+        vst1q_u64(dst + k + 12, a6);
+        vst1q_u64(dst + k + 14, a7);
+    }
+#endif
+    for (; k < words; ++k) {
+        dst[k] = src[k];
+    }
+}
 
 static uint64_t nxmt_extreme_cpu_pressure(uint64_t state, uint64_t value) {
     for (uint32_t i = 0; i < 64u; ++i) {
@@ -219,6 +283,23 @@ static void nxmt_write_chunk(
         }
         if (k < chunk_words) {
             p[k] = a_first;
+        }
+        break;
+    }
+    case NXMT_PHASE_STREAM: {
+        /* Pay the pattern compute once, then drive memory bandwidth with a
+         * tight NEON copy loop fed from a stamp hot in L1D. */
+        uint64_t stamp[NXMT_STREAM_STAMP_WORDS];
+        nxmt_fill_stream_stamp(stamp, seed, pass);
+        uint64_t stamp_pos = start_word & ((uint64_t)NXMT_STREAM_STAMP_WORDS - 1u);
+        uint64_t k = 0;
+        while (k < chunk_words) {
+            uint64_t need = chunk_words - k;
+            uint64_t avail = (uint64_t)NXMT_STREAM_STAMP_WORDS - stamp_pos;
+            uint64_t copy = need < avail ? need : avail;
+            nxmt_neon_copy_words(p + k, stamp + stamp_pos, copy);
+            k += copy;
+            stamp_pos = (stamp_pos + copy) & ((uint64_t)NXMT_STREAM_STAMP_WORDS - 1u);
         }
         break;
     }
@@ -410,6 +491,38 @@ static void nxmt_verify_chunk(
             if (actual != expected) {
                 nxmt_report_record_error(report, config->mode, phase, seed, pass, config->worker_id,
                     base_off + k * (uint64_t)NXMT_WORD_BYTES, expected, actual);
+            }
+        }
+        break;
+    }
+    case NXMT_PHASE_STREAM: {
+        /* Bulk compare against the same stamp the write side produced. memcmp
+         * gives newlib's optimized aarch64 path; only walk per-word if a
+         * mismatch is detected. */
+        uint64_t stamp[NXMT_STREAM_STAMP_WORDS];
+        nxmt_fill_stream_stamp(stamp, seed, pass);
+        uint64_t stamp_pos = start_word & ((uint64_t)NXMT_STREAM_STAMP_WORDS - 1u);
+        uint64_t k = 0;
+        bool has_mismatch = false;
+        while (k < chunk_words) {
+            uint64_t need = chunk_words - k;
+            uint64_t avail = (uint64_t)NXMT_STREAM_STAMP_WORDS - stamp_pos;
+            uint64_t cmp = need < avail ? need : avail;
+            if (memcmp(p + k, stamp + stamp_pos, cmp * sizeof(uint64_t)) != 0) {
+                has_mismatch = true;
+                break;
+            }
+            k += cmp;
+            stamp_pos = (stamp_pos + cmp) & ((uint64_t)NXMT_STREAM_STAMP_WORDS - 1u);
+        }
+        if (!has_mismatch) break;
+        const uint64_t mask = seed ^ (pass * kStreamPassMul);
+        for (uint64_t kk = 0; kk < chunk_words; ++kk) {
+            uint64_t expected = ((base_off + kk * (uint64_t)NXMT_WORD_BYTES) & 0x1fffull) ^ mask;
+            uint64_t actual = p[kk];
+            if (actual != expected) {
+                nxmt_report_record_error(report, config->mode, phase, seed, pass, config->worker_id,
+                    base_off + kk * (uint64_t)NXMT_WORD_BYTES, expected, actual);
             }
         }
         break;

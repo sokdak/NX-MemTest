@@ -45,6 +45,14 @@ uint64_t nxmt_expected_value(uint64_t seed, NxmtPhase phase, uint64_t pass, uint
         return ((word_index + pass) & 1u) ? 0xb6db6db6db6db6dbull
                                           : 0x4924924924924924ull;
     }
+    case NXMT_PHASE_STREAM: {
+        /* Position-repeating pattern with period 8 KiB (1024 words). The
+         * runner builds an 8 KiB stamp once per chunk and bulk-copies it
+         * across the slice; per-word pattern compute happens once per stamp
+         * instead of per word, freeing CPU for memory traffic. See
+         * runner.c nxmt_fill_stream_stamp. */
+        return (offset & 0x1fffull) ^ seed ^ (pass * 0xbf58476d1ce4e5b9ull);
+    }
     }
 
     return seed ^ offset ^ pass;

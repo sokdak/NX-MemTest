@@ -43,6 +43,7 @@ multiplications and shifts that don't have cheap NEON equivalents.
 | `WALKING`     | `1ULL << ((word_index + pass) & 63)`                       | Single-bit walking pattern; one bit set per word, position cycles per pass. |
 | `NARROW`      | `(X * 0x0101..01) ^ 0x0706050403020100 ^ seed`, `X = ((offset + pass*8) & 0xff)` | Narrow-store correctness. Written via 8-bit `STRB` instructions through a `volatile uint8_t*`; verifies the per-byte store path doesn't corrupt neighbours. |
 | `BITSPREAD`   | `((word_index + pass) & 1) ? 0xb6db..6db : 0x4924..924`    | Long-range bit coupling. Set bits are spaced every 3 positions, stressing cells whose neighbours are far apart in the bit layout. |
+| `STREAM`      | `(offset & 0x1fff) ^ seed ^ (pass * 0xbf58476d1ce4e5b9)`    | Bandwidth-focused. Per-word pattern compute happens once per chunk into an 8 KiB stamp that's then bulk-copied across the slice with a NEON copy loop; reads exercise the same memory but the CPU stays out of the hot path. |
 
 Constants:
 
@@ -59,12 +60,12 @@ Defined in `source/core/runner.c`:
 
 - **Quick Check** (`NXMT_MODE_QUICK`): `FIXED_A`, `ADDRESS`, `RANDOM`.
 - **Memory Load** (`NXMT_MODE_MEMORY_LOAD`): `FIXED_A`, `FIXED_5`, `CHECKER`,
-  `BITSPREAD`, `ADDRESS`, `RANDOM`, `WALKING`.
+  `BITSPREAD`, `STREAM`, `ADDRESS`, `RANDOM`, `WALKING`.
 - **Extreme** (`NXMT_MODE_EXTREME`): same as Memory Load, plus
   `nxmt_extreme_cpu_pressure` is folded over every word during both write and
   verify (see "Extreme CPU pressure").
 
-`nxmt_runner_phase_count(mode)` returns 3 or 7 accordingly.
+`nxmt_runner_phase_count(mode)` returns 3 or 8 accordingly.
 
 `NXMT_PHASE_NARROW` is defined and tested but not currently included in any
 mode's phase table: byte-granularity `STRB` stores are roughly an order of
