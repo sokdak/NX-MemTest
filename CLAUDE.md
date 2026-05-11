@@ -46,30 +46,62 @@ C11 + `<stdatomic.h>` + `<string.h>` + sized integer types.
 
 ## Build & test commands
 
-Host (no toolchain dependency on devkitPro):
+The repo's CMake doesn't pin a generator and `cmake.exe` is the only
+toolchain entry on the default PATH. The working recipes below were
+verified on this Windows host; they assume devkitPro is installed via
+msys2 pacman at the standard `/c/tools/msys64/...` layout.
 
-```powershell
-cmake -S . -B build/host
+### Host build (Ninja + UCRT64 gcc)
+
+The Bash tool's MSYS env keeps `gcc.exe` and `ninja.exe` under
+`/c/tools/msys64/ucrt64/bin`. Prepending that to PATH lets CMake's default
+Unix-Makefiles fallback or Ninja generator find a working compiler:
+
+```bash
+export PATH="/c/tools/msys64/ucrt64/bin:$PATH"
+cmake -S . -B build/host -G Ninja
 cmake --build build/host
 ctest --test-dir build/host --output-on-failure
 ```
 
-The repo's CMake doesn't pin a generator. If `cmake -B build/host` fails with
-"unable to find a build program", pass `-G "Ninja"` or `-G "Visual Studio 17 2022"`
-(or whatever is installed). On this Windows host as observed, only `cmake.exe`
-is in PATH; you may need to load a developer shell or install Ninja before
-CMake configure succeeds.
+Compiler observed: GCC 16.1.0 (mingw-w64 UCRT). Host build links 6 test
+executables; all six should pass.
 
-Switch (requires `DEVKITPRO`, devkitA64, libnx):
+### Switch NRO build (devkitA64 + libnx via msys2)
 
-```powershell
-pwsh -File scripts/check-toolchain.ps1   # sanity-check first
-make                                      # produces NX-MemTest.nro
+devkitPro is installed via the msys2 pacman repo at `/c/tools/msys64/opt/devkitpro`
+(visible inside msys2 as `/opt/devkitpro`). Versions observed:
+devkitA64 r29.2-1, devkita64-gcc 15.2.0, libnx 4.12.0-1.
+
+The Makefile fails with `Please set DEVKITPRO in your environment` when
+invoked from the default Bash tool shell (which is MINGW64-flavored git-bash):
+exports from that shell don't reach the msys2 `make.exe` reliably. Use msys2
+bash explicitly via `-lc`:
+
+```bash
+/c/tools/msys64/usr/bin/bash.exe -lc '
+  cd "$(cygpath -u "/c/Users/Administrator/Desktop/dev/NX-MemTest")"
+  export DEVKITPRO=/opt/devkitpro
+  export PATH=$DEVKITPRO/devkitA64/bin:$DEVKITPRO/tools/bin:$PATH
+  make
+'
 ```
 
-The Makefile auto-globs `*.c` under `source/core` and `source/nx`, so adding a
-new core source file is picked up automatically there. CMake is **not**
-auto-glob — you must register new sources explicitly (see "Adding files").
+Output: `NX-MemTest.nro` at the repo root, ~240 KiB. `make clean` removes
+the build/ directory, .elf, .nro, .nacp, and .map. The Makefile globs
+`*.c` under `source/core` and `source/nx`, so adding a new core source
+file is picked up automatically; CMake is **not** auto-glob (see
+"Adding files").
+
+### Sanity-check the toolchain
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/check-toolchain.ps1
+```
+
+This script looks for `gcc`/`clang`/`cl`, `make`, `aarch64-none-elf-gcc`,
+`nxlink`, and `DEVKITPRO`. On a default shell it will report most as
+missing — that's expected; the build recipes above set them inline.
 
 ## Invariants — do not break these
 
