@@ -17,10 +17,10 @@
  * All verification work runs on the GPU - the CPU stays out of the path.
  *
  * Caller is responsible for: providing 4 KiB-aligned storage of at least
- * 128 KiB + 2 * buffer_size; ensuring romfsInit has succeeded so the
- * gpu_verify.dksh shader is loadable from romfs:/shaders/; sharing the
- * same stop_requested flag the CPU workers respect; and calling
- * nxmt_gpu_pump_stop after CPU side has already signalled stop.
+ * 128 KiB + 2 * buffer_size; sharing the same stop_requested flag the
+ * CPU workers respect; and calling nxmt_gpu_pump_stop after CPU side has
+ * already signalled stop. The verify shader is embedded into the binary
+ * at build time so no romfs mount is needed.
  *
  * progress_bytes accumulates (buffer_size * 2) per completed copy (read +
  * write traffic on the memory bus), matching how CPU bytes_written +

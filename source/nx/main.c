@@ -2,8 +2,6 @@
 #include <stdarg.h>
 #include <stdatomic.h>
 #include <string.h>
-#include <sys/stat.h>
-#include <dirent.h>
 #include <switch.h>
 #include "nxmt/arena.h"
 #include "nxmt/platform.h"
@@ -779,44 +777,6 @@ int main(int argc, char **argv) {
     nxmt_platform_debug_stage("main-entry");
     nxmt_platform_console_init();
     nxmt_platform_debug_stage("console-init");
-    /* romfs holds the compiled GPU verify shader (gpu_verify.dksh).
-     * Failure here is non-fatal; the GPU pump path will detect a missing
-     * shader and refuse to activate, falling back to CPU-only operation.
-     * Log the result so post-mortem can distinguish "romfs mount failed"
-     * from "file path wrong". */
-    Result romfs_rc = romfsInit();
-    {
-        mkdir("sdmc:/switch/NX-MemTest", 0777);
-        mkdir("sdmc:/switch/NX-MemTest/logs", 0777);
-        FILE *f = fopen("sdmc:/switch/NX-MemTest/logs/gpu_pump.txt", "ab");
-        if (f != NULL) {
-            fprintf(f, "main: romfsInit -> 0x%x\n", (unsigned)romfs_rc);
-            /* Probe whether the canonical mount worked and the shader is
-             * reachable; the GPU pump tries this same path later. */
-            FILE *probe = fopen("romfs:/shaders/gpu_verify.dksh", "rb");
-            if (probe) {
-                fseek(probe, 0, SEEK_END);
-                long sz = ftell(probe);
-                fclose(probe);
-                fprintf(f, "main: shader probe OK, size=%ld\n", sz);
-            } else {
-                fprintf(f, "main: shader probe FAILED at romfs:/shaders/gpu_verify.dksh\n");
-                /* List romfs root to see if the mount is alive at all. */
-                DIR *d = opendir("romfs:/");
-                if (d) {
-                    struct dirent *e;
-                    while ((e = readdir(d)) != NULL) {
-                        fprintf(f, "  romfs root entry: %s\n", e->d_name);
-                    }
-                    closedir(d);
-                } else {
-                    fprintf(f, "  opendir(romfs:/) FAILED too\n");
-                }
-            }
-            fclose(f);
-        }
-    }
-    nxmt_platform_debug_stage("romfs-init");
 
     NxmtPlatformMemory memory;
     nxmt_platform_debug_stage("memory-query-start");
@@ -1284,6 +1244,5 @@ int main(int argc, char **argv) {
 
     tui_show_cursor();
     nxmt_platform_console_exit();
-    romfsExit();
     return 0;
 }

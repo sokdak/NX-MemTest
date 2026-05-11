@@ -9,8 +9,6 @@ TARGET := NX-MemTest
 BUILD := build
 SOURCES := source/core source/nx
 INCLUDES := include
-ROMFS := romfs
-OUT_SHADERS := shaders
 LIBDIRS := $(PORTLIBS) $(LIBNX)
 APP_TITLE := NX-MemTest
 APP_AUTHOR := Codex
@@ -32,36 +30,20 @@ export DEPSDIR := $(CURDIR)/$(BUILD)
 
 CFILES := $(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.c)))
 GLSLFILES := $(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.glsl)))
-export OFILES := $(CFILES:.c=.o)
+export OFILES := $(CFILES:.c=.o) $(GLSLFILES:.glsl=.dksh.o)
 export INCLUDE := $(foreach dir,$(INCLUDES),-I$(CURDIR)/$(dir)) $(foreach dir,$(LIBDIRS),-I$(dir)/include)
 export LIBPATHS := $(foreach dir,$(LIBDIRS),-L$(dir)/lib)
 
-ifneq ($(strip $(ROMFS)),)
-ROMFS_SHADERS := $(ROMFS)/$(OUT_SHADERS)
-ROMFS_TARGETS := $(patsubst %.glsl, $(ROMFS_SHADERS)/%.dksh, $(GLSLFILES))
-NROFLAGS += --romfsdir=$(CURDIR)/$(ROMFS)
-export NROFLAGS
-endif
-
-.PHONY: all clean $(BUILD) shaders
+.PHONY: all clean $(BUILD)
 
 all: $(BUILD)
 
-shaders: $(ROMFS_TARGETS)
-
-$(ROMFS_SHADERS):
-	@[ -d $@ ] || mkdir -p $@
-
-$(ROMFS_SHADERS)/%.dksh: $(CURDIR)/source/nx/%.glsl | $(ROMFS_SHADERS)
-	@echo "  uam comp $(notdir $<)"
-	@uam -s comp -o $@ $<
-
-$(BUILD): shaders
+$(BUILD):
 	@[ -d $@ ] || mkdir -p $@
 	@$(MAKE) --no-print-directory -C $(BUILD) -f $(CURDIR)/Makefile
 
 clean:
-	@rm -rf $(BUILD) $(ROMFS_SHADERS) $(TARGET).elf $(TARGET).nro $(TARGET).nacp $(TARGET).map
+	@rm -rf $(BUILD) $(TARGET).elf $(TARGET).nro $(TARGET).nacp $(TARGET).map
 
 else
 
@@ -70,6 +52,17 @@ DEPENDS := $(OFILES:.o=.d)
 $(OUTPUT).nro: $(OUTPUT).elf
 
 $(OUTPUT).elf: $(OFILES)
+
+# Compute shaders: GLSL -> DKSH (uam) -> .S (bin2s) -> .o.
+# The .S is piped straight to the C compiler so we don't leave intermediate
+# files around. Final symbol pair: <name>_dksh / <name>_dksh_end.
+%.dksh: %.glsl
+	@echo "  uam comp $(notdir $<)"
+	@uam -s comp -o $@ $<
+
+%.dksh.o: %.dksh
+	@echo "  embed   $(notdir $<)"
+	@bin2s $< | $(CC) -x assembler-with-cpp -c - -o $@
 
 -include $(DEPENDS)
 

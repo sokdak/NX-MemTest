@@ -47,7 +47,11 @@ static void pump_log_truncate(void) {
 #define NXMT_GPU_PUMP_LOCAL_X 256u
 #define NXMT_GPU_PUMP_BYTES_PER_INVOCATION 16u  /* one uvec4 per shader thread */
 
-#define NXMT_GPU_PUMP_SHADER_PATH "romfs:/shaders/gpu_verify.dksh"
+/* Compute shader is bin2s'd into the binary as a pair of symbols. Avoids the
+ * romfs path which fails to mount under hbloader title-override on some
+ * configurations (romfsInit returns LibnxError_IoError). */
+extern const uint8_t gpu_verify_dksh[];
+extern const uint8_t gpu_verify_dksh_end[];
 
 static Thread g_pump_thread;
 static unsigned char g_pump_stack[64 * 1024] __attribute__((aligned(0x1000)));
@@ -98,47 +102,35 @@ typedef struct DkshHeader {
 } DkshHeader;
 
 static bool pump_load_shader(uint8_t *shader_code_storage, size_t shader_code_max) {
-    pump_log("shader: fopen " NXMT_GPU_PUMP_SHADER_PATH);
-    FILE *f = fopen(NXMT_GPU_PUMP_SHADER_PATH, "rb");
-    if (f == NULL) {
-        pump_log("shader: fopen FAILED (errno-flavoured)");
+    size_t total = (size_t)(gpu_verify_dksh_end - gpu_verify_dksh);
+    if (total < sizeof(DkshHeader)) {
+        pump_log("shader: embedded blob too small");
         return false;
     }
     DkshHeader hdr;
-    if (fread(&hdr, sizeof(hdr), 1, f) != 1) {
-        fclose(f);
-        pump_log("shader: header read FAILED");
-        return false;
-    }
+    memcpy(&hdr, gpu_verify_dksh, sizeof(hdr));
     char buf[128];
-    snprintf(buf, sizeof(buf), "shader: magic=0x%08x ctrl_sz=%u code_sz=%u",
-        (unsigned)hdr.magic, (unsigned)hdr.control_sz, (unsigned)hdr.code_sz);
+    snprintf(buf, sizeof(buf),
+        "shader: embedded total=%zu magic=0x%08x ctrl_sz=%u code_sz=%u",
+        total, (unsigned)hdr.magic, (unsigned)hdr.control_sz, (unsigned)hdr.code_sz);
     pump_log(buf);
     if (hdr.code_sz > shader_code_max) {
-        fclose(f);
         pump_log("shader: code too large for reserved memblock");
+        return false;
+    }
+    if ((size_t)hdr.control_sz + (size_t)hdr.code_sz > total) {
+        pump_log("shader: control+code overflows the embedded blob");
         return false;
     }
     void *ctrl = malloc(hdr.control_sz);
     if (ctrl == NULL) {
-        fclose(f);
         pump_log("shader: ctrl malloc FAILED");
         return false;
     }
-    rewind(f);
-    if (fread(ctrl, hdr.control_sz, 1, f) != 1) {
-        free(ctrl);
-        fclose(f);
-        pump_log("shader: ctrl read FAILED");
-        return false;
-    }
-    if (fread(shader_code_storage, hdr.code_sz, 1, f) != 1) {
-        free(ctrl);
-        fclose(f);
-        pump_log("shader: code read FAILED");
-        return false;
-    }
-    fclose(f);
+    /* DKSH layout: control section starts at offset 0 (includes the header),
+     * code section starts at control_sz. */
+    memcpy(ctrl, gpu_verify_dksh, hdr.control_sz);
+    memcpy(shader_code_storage, gpu_verify_dksh + hdr.control_sz, hdr.code_sz);
     g_pump_shader_ctrl = ctrl;
 
     DkShaderMaker maker;
