@@ -6,6 +6,7 @@
 #include "nxmt/arena.h"
 #include "nxmt/platform.h"
 #include "nxmt/runner.h"
+#include "gpu_bench.h"
 
 #define NXMT_LOG_PATH "sdmc:/switch/NX-MemTest/logs/latest.txt"
 
@@ -464,23 +465,64 @@ static int tui_choose_duration(NxmtMode mode, uint64_t *out_seconds) {
     return 0;
 }
 
-static bool tui_choose_mode(uint64_t arena_size, NxmtMode *out_mode) {
-    bool has_memory_load = arena_size >= 256ull * NXMT_MIB_BYTES;
-    bool has_extreme = arena_size >= 512ull * NXMT_MIB_BYTES;
-
+static void tui_draw_mode_menu(uint64_t arena_size, bool has_memory_load, bool has_extreme) {
+    (void)arena_size;
     tui_section_top("Select Mode");
     tui_text_line(ANSI_GREEN "[A]" ANSI_RESET, "%s",  " Quick Check");
     tui_text_line(has_memory_load ? ANSI_GREEN "[X]" ANSI_RESET : ANSI_DIM "[X]" ANSI_RESET,
         " Memory Load%s", has_memory_load ? "" : "  (requires 256 MiB)");
     tui_text_line(has_extreme ? ANSI_GREEN "[Y]" ANSI_RESET : ANSI_DIM "[Y]" ANSI_RESET,
         " Extreme%s", has_extreme ? "" : "  (requires 512 MiB)");
+    tui_text_line(ANSI_CYAN "[B]" ANSI_RESET, "%s", " GPU Bandwidth PoC");
     tui_text_line(ANSI_RED "[+]" ANSI_RESET, "%s", " Exit");
     tui_section_bottom();
     nxmt_platform_print("\n");
     draw_footer_hint("Press a button to choose a mode.");
     nxmt_platform_console_flush();
+}
+
+static void run_gpu_bench_screen(const NxmtArena *arena, const NxmtPlatformMemory *memory) {
+    tui_clear();
+    draw_header();
+    nxmt_platform_print("\n");
+    tui_section_top("GPU Bandwidth PoC");
+    tui_text_line(ANSI_DIM, "%s", "Running deko3d buffer copies on the GPU copy engine...");
+    tui_section_bottom();
+    nxmt_platform_print("\n");
+    nxmt_platform_console_flush();
+
+    /* 32 MiB per buffer x 64 iterations = ~2 GiB of copy traffic.
+     * Small enough to fit inside the kernel-managed system heap that
+     * deko3d allocates from without touching the OverrideHeap arena. */
+    nxmt_gpu_bench_run(32ull * NXMT_MIB_BYTES, 64u);
+
+    nxmt_platform_print("\n");
+    draw_footer_hint("[B] / [PLUS] back to menu");
+    nxmt_platform_console_flush();
 
     while (appletMainLoop()) {
+        NxmtInput in = nxmt_platform_read_input();
+        if (in.plus || in.b) break;
+        svcSleepThread(16000000ll);
+    }
+
+    tui_clear();
+    draw_header();
+    nxmt_platform_print("\n");
+    draw_memory_section(arena, memory);
+    nxmt_platform_print("\n");
+}
+
+static bool tui_choose_mode(const NxmtArena *arena, const NxmtPlatformMemory *memory, NxmtMode *out_mode) {
+    bool has_memory_load = arena->size >= 256ull * NXMT_MIB_BYTES;
+    bool has_extreme    = arena->size >= 512ull * NXMT_MIB_BYTES;
+    bool need_redraw = true;
+
+    while (appletMainLoop()) {
+        if (need_redraw) {
+            tui_draw_mode_menu(arena->size, has_memory_load, has_extreme);
+            need_redraw = false;
+        }
         NxmtInput input = nxmt_platform_read_input();
         if (input.plus) {
             return false;
@@ -496,6 +538,10 @@ static bool tui_choose_mode(uint64_t arena_size, NxmtMode *out_mode) {
         if (input.y && has_extreme) {
             *out_mode = NXMT_MODE_EXTREME;
             return true;
+        }
+        if (input.b) {
+            run_gpu_bench_screen(arena, memory);
+            need_redraw = true;
         }
         svcSleepThread(16000000ll);
     }
@@ -691,7 +737,7 @@ int main(int argc, char **argv) {
     uint64_t duration_seconds = 0;
     while (true) {
         nxmt_platform_debug_stage("mode-select-start");
-        if (!tui_choose_mode(arena.size, &mode)) {
+        if (!tui_choose_mode(&arena, &memory, &mode)) {
             tui_show_cursor();
             nxmt_platform_console_exit();
             return 0;
