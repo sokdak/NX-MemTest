@@ -112,13 +112,21 @@ static void pump_thread_entry(void *arg) {
     }
     atomic_store(&g_pump_init_done, true);
 
+    /* Batch submits so the per-wait wake-up latency amortises across many
+     * copies. With a single submit per wait the pump thread spent the bulk
+     * of its time blocked on the scheduler between iterations, leaving the
+     * GPU mostly idle even when it had bandwidth available. */
+    const uint32_t batch_size = 8u;
     const uint64_t per_iter_traffic = buffer_aligned * 2ull;
     nxmt_platform_debug_stage("gpu-pump-loop");
     while (!atomic_load_explicit(g_pump_stop, memory_order_relaxed) && !g_pump_error_seen) {
-        dkQueueSubmitCommands(g_pump_queue, g_pump_list);
+        for (uint32_t i = 0; i < batch_size; ++i) {
+            dkQueueSubmitCommands(g_pump_queue, g_pump_list);
+        }
         dkQueueWaitIdle(g_pump_queue);
         if (g_pump_progress != NULL) {
-            atomic_fetch_add_explicit(g_pump_progress, per_iter_traffic, memory_order_relaxed);
+            atomic_fetch_add_explicit(g_pump_progress,
+                per_iter_traffic * batch_size, memory_order_relaxed);
         }
     }
 
@@ -127,7 +135,7 @@ static void pump_thread_entry(void *arg) {
 }
 
 bool nxmt_gpu_pump_start(void *storage_base, uint64_t storage_size,
-                         uint64_t buffer_size,
+                         uint64_t buffer_size, int affinity_core,
                          atomic_bool *stop_requested,
                          atomic_uint_fast64_t *progress_bytes) {
     if (storage_base == NULL || stop_requested == NULL || buffer_size == 0u) {
@@ -147,7 +155,7 @@ bool nxmt_gpu_pump_start(void *storage_base, uint64_t storage_size,
     g_pump_error_seen = 0;
 
     Result rc = threadCreate(&g_pump_thread, pump_thread_entry, NULL,
-        g_pump_stack, sizeof(g_pump_stack), 0x2d, -2);
+        g_pump_stack, sizeof(g_pump_stack), 0x2d, affinity_core);
     if (R_FAILED(rc)) return false;
     rc = threadStart(&g_pump_thread);
     if (R_FAILED(rc)) {

@@ -860,24 +860,31 @@ int main(int argc, char **argv) {
      * the CPU workers, carve a 256 MiB tail off the arena for a GPU copy
      * pump that runs concurrently and adds another stream of bus traffic.
      * The reserved region isn't tested by CPU this run; on the next pass
-     * the CPU side rewrites everything anyway. Quick Check stays CPU-only. */
+     * the CPU side rewrites everything anyway. Quick Check stays CPU-only.
+     *
+     * When the pump is active we also surrender the last CPU core for its
+     * exclusive use so the pump thread isn't preempted between GPU
+     * completions; otherwise wake-up latency dominates and GPU sits idle. */
     NxmtArena cpu_arena = arena;
     bool gpu_pump_active = false;
     uint64_t gpu_pump_region = 0;
     atomic_uint_fast64_t gpu_pump_bytes;
     atomic_init(&gpu_pump_bytes, 0u);
     if ((mode == NXMT_MODE_MEMORY_LOAD || mode == NXMT_MODE_EXTREME)
-        && arena.size >= 1024ull * NXMT_MIB_BYTES) {
+        && arena.size >= 1024ull * NXMT_MIB_BYTES && workers >= 2u) {
         gpu_pump_region = 256ull * NXMT_MIB_BYTES;
         cpu_arena.size  = arena.size - gpu_pump_region;
         cpu_arena.words = cpu_arena.size / NXMT_WORD_BYTES;
         void *gpu_storage = arena.base + cpu_arena.size;
         atomic_init(&g_stop_requested, false);
+        int pump_core = worker_cpu_map[workers - 1u]; /* steal the last worker's core */
         gpu_pump_active = nxmt_gpu_pump_start(
             gpu_storage, gpu_pump_region,
-            64ull * NXMT_MIB_BYTES,
+            64ull * NXMT_MIB_BYTES, pump_core,
             &g_stop_requested, &gpu_pump_bytes);
-        if (!gpu_pump_active) {
+        if (gpu_pump_active) {
+            workers -= 1u;
+        } else {
             /* GPU pump failed; revert to full-arena CPU-only operation. */
             cpu_arena = arena;
             gpu_pump_region = 0;

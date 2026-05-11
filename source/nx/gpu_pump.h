@@ -23,7 +23,7 @@
  * false the caller should fall back to CPU-only operation.
  */
 bool nxmt_gpu_pump_start(void *storage_base, uint64_t storage_size,
-                         uint64_t buffer_size,
+                         uint64_t buffer_size, int affinity_core,
                          atomic_bool *stop_requested,
                          atomic_uint_fast64_t *progress_bytes);
 
