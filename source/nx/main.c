@@ -8,6 +8,7 @@
 #include "nxmt/runner.h"
 #include "gpu_bench.h"
 #include "gpu_pump.h"
+#include "cpu_filler.h"
 
 #define NXMT_LOG_PATH "sdmc:/switch/NX-MemTest/logs/latest.txt"
 
@@ -891,6 +892,18 @@ int main(int argc, char **argv) {
         }
     }
 
+    /* Extreme is the "max system stress" mode - the GPU pump on its
+     * dedicated core spends most of its CPU time blocked on dkQueueWaitIdle,
+     * which leaves that core hot but lightly used. Layer a 50% duty-cycle
+     * pure-ALU filler on the same core so that core also contributes
+     * thermal / power load alongside the pump. Memory Load skips this so
+     * its bandwidth result stays uncontaminated. */
+    bool cpu_filler_active = false;
+    if (mode == NXMT_MODE_EXTREME && gpu_pump_active) {
+        int pump_core = worker_cpu_map[workers]; /* the just-stolen core */
+        cpu_filler_active = nxmt_cpu_filler_start(pump_core, &g_stop_requested);
+    }
+
     tui_clear();
     draw_header();
     nxmt_platform_print("\n");
@@ -1144,6 +1157,9 @@ int main(int argc, char **argv) {
     /* Make sure the GPU pump observes stop_requested = true and drains its
      * in-flight commands before we tally bytes pumped. */
     atomic_store_explicit(&g_stop_requested, true, memory_order_relaxed);
+    if (cpu_filler_active) {
+        nxmt_cpu_filler_stop();
+    }
     if (gpu_pump_active) {
         nxmt_gpu_pump_stop();
     }
