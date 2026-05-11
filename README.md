@@ -133,6 +133,10 @@ Every `(seed, phase, pass, offset)` produces the same expected value, so a
 mismatch can be reproduced exactly given the seed printed in the report. See
 `nxmt_expected_value` in `source/core/patterns.c`.
 
+## License
+
+MIT (see [LICENSE](LICENSE)).
+
 ## Status / Scope
 
 Out of scope for the first version: NSP forwarders, GPU/DMA stress,
