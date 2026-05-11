@@ -492,11 +492,11 @@ static void run_gpu_bench_screen(const NxmtArena *arena, const NxmtPlatformMemor
     nxmt_platform_print("\n");
     nxmt_platform_console_flush();
 
-    /* Each call allocates two src+dst buffers and one 64 KiB cmd block,
-     * then frees them, so peak transient memory pressure is roughly
-     * size * 2. Iterations chosen so each step moves ~512 MiB of bytes,
-     * which keeps measurement noise low without dragging total run time
-     * past a few seconds. */
+    /* Carve a slice off the tail of the test arena for GPU buffers; the
+     * kernel pool is too tight to allocate fresh deko3d MemBlocks because
+     * OverrideHeap owns almost all physical RAM. The slice is owned by the
+     * arena anyway and gets overwritten on the next memory test, so the
+     * GPU PoC reusing it is harmless. */
     static const struct {
         uint64_t size_mib;
         uint32_t iters;
@@ -508,11 +508,24 @@ static void run_gpu_bench_screen(const NxmtArena *arena, const NxmtPlatformMemor
         { 128,  4 },
         { 256,  2 },
     };
+    uint64_t max_step_bytes = 256ull * NXMT_MIB_BYTES;
+    /* Need cmd + 2 * largest buffer; round up generously. */
+    uint64_t storage_needed = max_step_bytes * 2u + NXMT_MIB_BYTES;
+    if (storage_needed > arena->size) {
+        storage_needed = arena->size;
+    }
+    void *gpu_storage = arena->base + (arena->size - storage_needed);
+    nxmt_platform_print(ANSI_DIM
+        "Using %llu MiB at arena tail (%p) as GPU storage.\n" ANSI_RESET,
+        (unsigned long long)(storage_needed / NXMT_MIB_BYTES), gpu_storage);
+    nxmt_platform_console_flush();
+
     for (size_t i = 0; i < sizeof(steps) / sizeof(steps[0]); ++i) {
         nxmt_platform_print(ANSI_BOLD "== buffer %llu MiB x %u iters ==" ANSI_RESET "\n",
             (unsigned long long)steps[i].size_mib, steps[i].iters);
         nxmt_platform_console_flush();
-        bool ok = nxmt_gpu_bench_run(steps[i].size_mib * NXMT_MIB_BYTES, steps[i].iters);
+        bool ok = nxmt_gpu_bench_run(gpu_storage, storage_needed,
+            steps[i].size_mib * NXMT_MIB_BYTES, steps[i].iters);
         if (!ok) {
             nxmt_platform_print(ANSI_YELLOW
                 "  step failed - stopping sweep at %llu MiB\n" ANSI_RESET,
